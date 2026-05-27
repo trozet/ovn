@@ -43,6 +43,15 @@ ct_zone_limits_update_per_dp(struct ct_zone_ctx *ctx,
                              const struct local_datapath *local_dp,
                              const struct shash *local_lports,
                              const char *name);
+static void
+ct_zone_add_ld_port_nat_zone_users(const struct local_datapath *ld,
+                                   struct sset *all_users);
+static bool
+ct_zone_has_ld_port_nat_zones(struct ct_zone_ctx *ctx,
+                              const struct local_datapath *ld);
+static bool
+ct_zone_datapath_uses_port_nat_zones(
+    const struct sbrec_datapath_binding *dp);
 static bool ct_zone_limit_update(struct ct_zone_ctx *ctx, const char *name,
                                  int64_t limit);
 static int64_t ct_zone_get_dp_limit(const struct sbrec_datapath_binding *dp);
@@ -203,6 +212,7 @@ ct_zones_update(const struct simap *local_lports,
         char *snat = alloc_nat_zone_key(name, "snat");
         sset_add(&all_users, dnat);
         sset_add(&all_users, snat);
+        ct_zone_add_ld_port_nat_zone_users(ld, &all_users);
 
         int req_snat_zone = ct_zone_get_snat(ld->datapath);
         if (req_snat_zone >= 0) {
@@ -370,6 +380,12 @@ ct_zone_handle_dp_update(struct ct_zone_ctx *ctx,
                          const struct local_datapath *local_dp,
                          const struct shash *local_lports)
 {
+    if (!strcmp(local_dp->datapath->type, "logical-router") &&
+        (ct_zone_datapath_uses_port_nat_zones(local_dp->datapath) ||
+         ct_zone_has_ld_port_nat_zones(ctx, local_dp))) {
+        return false;
+    }
+
     const char *name = smap_get(&local_dp->datapath->external_ids, "name");
     if (!name) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
@@ -531,6 +547,111 @@ ct_zone_get_snat(const struct sbrec_datapath_binding *dp)
     return smap_get_int(&dp->external_ids, "snat-ct-zone", -1);
 }
 
+static bool
+ct_zone_datapath_uses_port_nat_zones(
+    const struct sbrec_datapath_binding *dp)
+{
+    return smap_get_bool(&dp->external_ids, "ct-commit-all", false) &&
+           !smap_get(&dp->external_ids, "snat-ct-zone");
+}
+
+static const char *
+ct_zone_nat_port_name(const struct sbrec_port_binding *pb)
+{
+    const char *distributed_port = smap_get(&pb->options, "distributed-port");
+    return distributed_port ? distributed_port : pb->logical_port;
+}
+
+static void
+ct_zone_add_nat_zone_users(struct sset *all_users, const char *name)
+{
+    char *dnat = alloc_nat_zone_key(name, "dnat");
+    sset_add(all_users, dnat);
+    free(dnat);
+
+    char *snat = alloc_nat_zone_key(name, "snat");
+    sset_add(all_users, snat);
+    free(snat);
+}
+
+static bool
+ct_zone_pb_uses_port_nat_zones(const struct sbrec_port_binding *pb)
+{
+    return pb && !strcmp(pb->datapath->type, "logical-router") &&
+           ct_zone_datapath_uses_port_nat_zones(pb->datapath);
+}
+
+static void
+ct_zone_add_pb_nat_zone_users(const struct sbrec_port_binding *pb,
+                              struct sset *all_users)
+{
+    if (!ct_zone_pb_uses_port_nat_zones(pb)) {
+        return;
+    }
+    ct_zone_add_nat_zone_users(all_users, ct_zone_nat_port_name(pb));
+}
+
+static void
+ct_zone_add_ld_port_nat_zone_users(const struct local_datapath *ld,
+                                   struct sset *all_users)
+{
+    if (ld->is_switch ||
+        !ct_zone_datapath_uses_port_nat_zones(ld->datapath)) {
+        return;
+    }
+
+    struct peer_ports peers;
+    VECTOR_FOR_EACH (&ld->peer_ports, peers) {
+        if (peers.local && peers.local->datapath == ld->datapath) {
+            ct_zone_add_pb_nat_zone_users(peers.local, all_users);
+        }
+        if (peers.remote && peers.remote->datapath == ld->datapath) {
+            ct_zone_add_pb_nat_zone_users(peers.remote, all_users);
+        }
+    }
+}
+
+static bool
+ct_zone_has_nat_zone(struct ct_zone_ctx *ctx, const char *name)
+{
+    char *dnat = alloc_nat_zone_key(name, "dnat");
+    bool has_zone = shash_find(&ctx->current, dnat) != NULL;
+    free(dnat);
+
+    if (has_zone) {
+        return true;
+    }
+
+    char *snat = alloc_nat_zone_key(name, "snat");
+    has_zone = shash_find(&ctx->current, snat) != NULL;
+    free(snat);
+
+    return has_zone;
+}
+
+static bool
+ct_zone_has_ld_port_nat_zones(struct ct_zone_ctx *ctx,
+                              const struct local_datapath *ld)
+{
+    if (ld->is_switch) {
+        return false;
+    }
+
+    struct peer_ports peers;
+    VECTOR_FOR_EACH (&ld->peer_ports, peers) {
+        if (peers.local && peers.local->datapath == ld->datapath &&
+            ct_zone_has_nat_zone(ctx, ct_zone_nat_port_name(peers.local))) {
+            return true;
+        }
+        if (peers.remote && peers.remote->datapath == ld->datapath &&
+            ct_zone_has_nat_zone(ctx, ct_zone_nat_port_name(peers.remote))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static void
 ct_zone_add_pending(struct shash *pending_ct_zones,
                     enum ct_zone_pending_state state,
@@ -629,6 +750,33 @@ ct_zone_limits_update_per_dp(struct ct_zone_ctx *ctx,
 
     bool zone_updated = ct_zone_limit_update(ctx, dnat, dp_limit);
     zone_updated |= ct_zone_limit_update(ctx, snat, dp_limit);
+
+    if (!local_dp->is_switch &&
+        ct_zone_datapath_uses_port_nat_zones(local_dp->datapath)) {
+        struct peer_ports peers;
+        VECTOR_FOR_EACH (&local_dp->peer_ports, peers) {
+            const struct sbrec_port_binding *pbs[] = {
+                peers.local, peers.remote,
+            };
+            for (size_t i = 0; i < ARRAY_SIZE(pbs); i++) {
+                const struct sbrec_port_binding *pb = pbs[i];
+                if (!ct_zone_pb_uses_port_nat_zones(pb) ||
+                    pb->datapath != local_dp->datapath) {
+                    continue;
+                }
+
+                char *port_dnat =
+                    alloc_nat_zone_key(ct_zone_nat_port_name(pb), "dnat");
+                zone_updated |= ct_zone_limit_update(ctx, port_dnat, dp_limit);
+                free(port_dnat);
+
+                char *port_snat =
+                    alloc_nat_zone_key(ct_zone_nat_port_name(pb), "snat");
+                zone_updated |= ct_zone_limit_update(ctx, port_snat, dp_limit);
+                free(port_snat);
+            }
+        }
+    }
 
     if (local_dp->is_switch && zone_updated) {
         const struct shash_node *node;
