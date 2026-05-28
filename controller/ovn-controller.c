@@ -2571,6 +2571,15 @@ ct_zones_runtime_data_handler(struct engine_node *node, void *data)
             return EN_UNHANDLED;
         }
 
+        const struct local_datapath *local_dp =
+            get_local_datapath(&rt_data->local_datapaths,
+                               tdp->dp->tunnel_key);
+        if (local_dp &&
+            !ct_zone_handle_dp_update(&ct_zones_data->ctx, local_dp,
+                                      &rt_data->lbinding_data.lports)) {
+            return EN_UNHANDLED;
+        }
+
         struct shash_node *shash_node;
         SHASH_FOR_EACH (shash_node, &tdp->lports) {
             struct tracked_lport *t_lport = shash_node->data;

@@ -63,6 +63,10 @@ gather_external_ids(const struct nbrec_logical_router *nbr,
                         nat_default_ct);
     }
 
+    if (smap_get_bool(&nbr->options, "ct-commit-all", false)) {
+        smap_add(external_ids, "ct-commit-all", "true");
+    }
+
     bool learn_from_arp_request =
         smap_get_bool(&nbr->options, "always_learn_from_arp_request",
                       true);

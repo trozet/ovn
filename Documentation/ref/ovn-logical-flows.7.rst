@@ -2588,12 +2588,18 @@ Ingress Table 6: POST USNAT
 This is to check whether the packet is already tracked in SNAT zone. It contains
 a priority-0 flow that simply moves traffic to the next table.
 
-If the ``options:ct-commit-all`` is set to ``true`` the following two flows are
-configured matching on ``ip && ct.new`` with an action ``flags.unsnat_new = 1;
-next;`` and ``ip && !ct.trk`` with an action ``flags.unsnat_not_tracked = 1;
-next;`` Which sets one of the flags that is used in later stages. There is extra
-match on both when there is configured DGP ``inport == DGP &&
-is_chassis_resident(CHASSIS)``.
+If the ``options:ct-commit-all`` is set to ``true`` and
+``options:snat-ct-zone`` is not set, a flow is configured matching on ``ip &&
+ct.new`` with an action ``flags.unsnat_new = 1; ct_commit_to_zone(snat);``.
+The flow does not match traffic whose source IP is one of the SNAT source IPs
+of this router. This avoids conflicting SNAT zone commits for hairpin traffic
+that was already SNATed to a router external IP. There is extra match when
+there is configured DGP ``inport == DGP && is_chassis_resident(CHASSIS)``.
+
+If ``options:snat-ct-zone`` is set, the legacy ``ct-commit-all`` flows are
+used instead.  Those match ``ip && ct.new`` with action ``flags.unsnat_new = 1;
+next;`` and ``ip && !ct.trk`` with action ``flags.unsnat_not_tracked = 1;
+next;``.
 
 .. _lr-in-7:
 
@@ -3611,6 +3617,12 @@ Egress Table 1: UNDNAT on Distributed Routers
   associated with the IP address *A* in the NAT rule.  This allows upstream MAC
   learning to point to the correct chassis.
 
+- If the ``options:ct-commit-all`` is set to ``true`` and
+  ``options:snat-ct-zone`` is not set, a priority-10 flow is configured
+  matching on ``ip && (!ct.trk || !ct.rpl)`` with an action
+  ``ct_next(dnat);``. There is extra match when there is configured DGP
+  ``outport == DGP && is_chassis_resident(CHASSIS)``.
+
 .. _lr-out-2:
 
 Egress Table 2: Post UNDNAT
@@ -3624,10 +3636,16 @@ Egress Table 2: Post UNDNAT
   previous table :ref:`UNDNAT <lr-out-1>` for Gateway routers.  This flow
   matches on ``ct.new && ip`` with action ``ct_commit { } ; next;``.
 
-- If the ``options:ct-commit-all`` is set to ``true`` the following flows are
-  configured matching on ``ip && (!ct.trk || !ct.rpl) &&
-  flags.unsnat_not_tracked == 1`` with  an action ``ct_next(snat);`` and ``ip &&
-  flags.unsnat_new == 1`` with an action ``next;``. There is extra match when
+- If the ``options:ct-commit-all`` is set to ``true`` and
+  ``options:snat-ct-zone`` is not set, a priority-10 flow is configured
+  matching on ``ip && ct.new`` with an action ``ct_commit_to_zone(dnat);``.
+  There is extra match when there is configured DGP ``outport == DGP &&
+  is_chassis_resident(CHASSIS)``.
+
+- If ``options:snat-ct-zone`` is set, the legacy ``ct-commit-all`` flows are
+  used instead.  Those match ``ip && (!ct.trk || !ct.rpl) &&
+  flags.unsnat_not_tracked == 1`` with action ``ct_next(snat);`` and ``ip &&
+  flags.unsnat_new == 1`` with action ``next;``. There is extra match when
   there is configured DGP ``outport == DGP && is_chassis_resident(CHASSIS)``.
 
 - A priority-0 logical flow with match ``1`` has actions ``next;``.
@@ -3714,8 +3732,7 @@ based on the configuration in the OVN Northbound database.
 
 - If the ``options:ct-commit-all`` is set to ``true`` the following two flows
   are configured matching on ``ip && (!ct.trk || !ct.rpl) && flags.unsnat_new ==
-  1`` and ``ip && ct.new && flags.unsnat_not_tracked == 1`` both with an action
-  ``ct_commit_to_zone(snat);``.
+  1`` and ``ip && ct.new`` both with an action ``ct_commit_to_zone(snat);``.
 
 - A priority-0 logical flow with match ``1`` has actions ``next;``.
 
@@ -3762,8 +3779,7 @@ based on the configuration in the OVN Northbound database.
 - If the ``options:ct-commit-all`` is set to ``true`` the following two flows
   are configured matching on ``ip && (!ct.trk || !ct.rpl) && flags.unsnat_new ==
   1 && outport == DGP && is_chassis_resident(CHASSIS)`` and ``ip && ct.new &&
-  flags.unsnat_not_tracked == 1 && outport == DGP &&
-  is_chassis_resident(CHASSIS)`` both  with an action
+  outport == DGP && is_chassis_resident(CHASSIS)`` both  with an action
   ``ct_commit_to_zone(snat);``.
 
 - A priority-0 logical flow with match ``1`` has actions ``next;``.

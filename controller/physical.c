@@ -468,12 +468,35 @@ get_zone_ids(const struct sbrec_port_binding *binding,
         return zone_ids;
     }
 
+    if (!strcmp(binding->datapath->type, "logical-router") &&
+        smap_get_bool(&binding->datapath->external_ids, "ct-commit-all",
+                      false) &&
+        !smap_get(&binding->datapath->external_ids, "snat-ct-zone")) {
+        const char *port_name = smap_get(&binding->options,
+                                         "distributed-port");
+        if (!port_name) {
+            port_name = binding->logical_port;
+        }
+
+        char *dnat = alloc_nat_zone_key(port_name, "dnat");
+        zone_ids.dnat = ct_zone_find_zone(ct_zones, dnat);
+        free(dnat);
+
+        char *snat = alloc_nat_zone_key(port_name, "snat");
+        zone_ids.snat = ct_zone_find_zone(ct_zones, snat);
+        free(snat);
+    }
+
     char *dnat = alloc_nat_zone_key(name, "dnat");
-    zone_ids.dnat = ct_zone_find_zone(ct_zones, dnat);
+    if (!zone_ids.dnat) {
+        zone_ids.dnat = ct_zone_find_zone(ct_zones, dnat);
+    }
     free(dnat);
 
     char *snat = alloc_nat_zone_key(name, "snat");
-    zone_ids.snat = ct_zone_find_zone(ct_zones, snat);
+    if (!zone_ids.snat) {
+        zone_ids.snat = ct_zone_find_zone(ct_zones, snat);
+    }
     free(snat);
 
     return zone_ids;
