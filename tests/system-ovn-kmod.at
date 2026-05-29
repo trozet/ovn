@@ -1045,7 +1045,8 @@ start_daemon ovn-controller
 #    bar ----
 
 check ovn-nbctl lr-add R1
-check ovn-nbctl set logical_router R1 options:ct-commit-all="true"
+check ovn-nbctl set logical_router R1 options:ct-commit-all="true" \
+    options:snat-ct-zone=42
 
 check ovn-nbctl ls-add foo
 check ovn-nbctl ls-add bar
@@ -1253,7 +1254,8 @@ start_daemon ovn-controller
 #    bar ----
 
 check ovn-nbctl lr-add R1
-check ovn-nbctl set logical_router R1 options:ct-commit-all="true"
+check ovn-nbctl set logical_router R1 options:ct-commit-all="true" \
+    options:snat-ct-zone=42
 
 check ovn-nbctl ls-add foo
 check ovn-nbctl ls-add bar
@@ -1576,7 +1578,7 @@ check ovs-vsctl \
 start_daemon ovn-controller
 
 check ovn-nbctl lr-add lr \
-    -- set logical_router lr options:chassis=hv1
+    -- set logical_router lr options:chassis=hv1 options:ct-commit-all=true
 check ovn-nbctl lrp-add lr lr-ls1 00:00:00:00:01:00 41.41.41.2/24
 check ovn-nbctl lrp-add lr lr-ls2 00:00:00:00:02:00 42.42.42.2/24
 check ovn-nbctl ls-add ls1
@@ -1612,7 +1614,7 @@ check ovn-nbctl --wait=hv sync
 
 ovs-appctl revalidator/pause
 on_exit 'ovs-appctl revalidator/resume'
-NS_CHECK_EXEC([vm2], [nc -z 42.42.42.2 8080], 0, [ignore], [ignore])
+NS_CHECK_EXEC([vm2], [echo "test" | nc -w 1 --send-only 42.42.42.2 8080], 0, [ignore], [ignore])
 
 dnl For each DP flow with ct action, make sure a CT entry exists as established
 dnl for the zone the ct action is taken. Otherwise it means HW offload is
@@ -1638,6 +1640,7 @@ check_flow_assured() {
     fi
 
     zone=$(awk -F 'zone=' '{ print $2 }' <<< "$flow_str" | awk -F ',' '{print $1}')
+    zone=${zone%%)*}
     echo Check if a conntrack entry exists for src=$src_ip, dst=$dst_ip, zone=$zone
 
     if test -n "$src_ip" && test -n "$dst_ip"; then

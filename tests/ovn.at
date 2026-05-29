@@ -42167,6 +42167,62 @@ zone_list_hv2_after_recompute=$(as hv2 ovn-appctl -t ovn-controller ct-zone-list
 AT_CHECK([test "X$zone_list_hv1" = "X$zone_list_hv1_after_recompute"])
 AT_CHECK([test "X$zone_list_hv2" = "X$zone_list_hv2_after_recompute"])
 
+AS_BOX([With patch ports and ct-commit-all])
+check ovn-nbctl --wait=hv set Logical_Router r1 options:ct-commit-all=true
+zone_list_hv1=$(as hv1 ovn-appctl -t ovn-controller ct-zone-list | sort)
+AT_CHECK([echo "$zone_list_hv1" | sed "s/ [[0-9]]*/ ??/" | sort], [0], [dnl
+ls1_dnat ??
+ls1_snat ??
+ls2_dnat ??
+ls2_snat ??
+lsp1 ??
+r1-ls1_dnat ??
+r1-ls1_snat ??
+r1-ls2_dnat ??
+r1-ls2_snat ??
+r1_dnat ??
+r1_snat ??
+])
+
+zone_list_hv2=$(as hv2 ovn-appctl -t ovn-controller ct-zone-list | sort)
+AT_CHECK([echo "$zone_list_hv2" | sed "s/ [[0-9]]*/ ??/" | sort], [0], [dnl
+ls1_dnat ??
+ls1_snat ??
+ls2_dnat ??
+ls2_snat ??
+lsp2 ??
+r1-ls1_dnat ??
+r1-ls1_snat ??
+r1-ls2_dnat ??
+r1-ls2_snat ??
+r1_dnat ??
+r1_snat ??
+])
+
+AS_BOX([With patch ports after disabling ct-commit-all])
+check ovn-nbctl --wait=hv remove Logical_Router r1 options ct-commit-all
+zone_list_hv1=$(as hv1 ovn-appctl -t ovn-controller ct-zone-list | sort)
+AT_CHECK([echo "$zone_list_hv1" | sed "s/ [[0-9]]*/ ??/" | sort], [0], [dnl
+ls1_dnat ??
+ls1_snat ??
+ls2_dnat ??
+ls2_snat ??
+lsp1 ??
+r1_dnat ??
+r1_snat ??
+])
+
+zone_list_hv2=$(as hv2 ovn-appctl -t ovn-controller ct-zone-list | sort)
+AT_CHECK([echo "$zone_list_hv2" | sed "s/ [[0-9]]*/ ??/" | sort], [0], [dnl
+ls1_dnat ??
+ls1_snat ??
+ls2_dnat ??
+ls2_snat ??
+lsp2 ??
+r1_dnat ??
+r1_snat ??
+])
+
 AS_BOX([With l3gw in hv2])
 check ovn-nbctl --wait=hv set Logical_Router r1 options:chassis=hv2
 # ls2 should now only be a local datapath in hv2.
@@ -46186,4 +46242,3 @@ OVN_CHECK_PACKETS_CONTAIN([hv/br-phys_n1-tx.pcap], [expected_nd_ns])
 OVN_CLEANUP([hv])
 AT_CLEANUP
 ])
-

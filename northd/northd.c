@@ -5126,6 +5126,9 @@ northd_handle_ls_changes(struct ovsdb_idl_txn *ovnsb_idl_txn,
             goto fail;
         }
 
+        if (sparse_array_get(&nd->ls_datapaths.dps, synced->sdp->index)) {
+            goto fail;
+        }
         struct ovn_datapath *od = ovn_datapath_create(
             &nd->ls_datapaths.datapaths, &new_ls->header_.uuid, new_ls,
             NULL, synced->sdp);
@@ -5456,6 +5459,9 @@ northd_handle_lr_changes(const struct northd_input *ni,
         /* If the logical router is create with the below columns set,
          * then we can't handle it in the incremental processor goto fail. */
         if (new_lr->copp || (new_lr->n_ports > 0)) {
+            goto fail;
+        }
+        if (sparse_array_get(&nd->lr_datapaths.dps, synced->sdp->index)) {
             goto fail;
         }
         struct ovn_datapath *od = ovn_datapath_create(
@@ -18072,43 +18078,106 @@ build_gw_lrouter_commit_all(const struct ovn_datapath *od,
     if (!(features->ct_commit_to_zone && features->ct_next_zone)) {
         return;
     }
+    bool use_port_nat_zones = !smap_get(&od->nbr->options, "snat-ct-zone");
 
     /* Note: We can use match on "!ct.rpl" as optimization here, even if the
      * previous state is from different zone. The packet that is already reply
      * should be reply in both zones. */
     ovn_lflow_add(lflows, od, S_ROUTER_IN_DEFRAG, 10,
-                  "ip && (!ct.trk || !ct.rpl)",
+                  "ip && (!ct.trk || !ct.rpl) && "
+                  "flags.skip_snat_for_lb == 0",
                   "ct_next(dnat);", lflow_ref);
     ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 10,
-                  "ip && ct.new", "ct_commit_to_zone(dnat);", lflow_ref);
+                  "ip && ct.new && flags.skip_snat_for_lb == 0",
+                  "ct_commit_to_zone(dnat);", lflow_ref);
 
     /* We would lose the CT state especially the ct.new flag if we have
      * mixed SNAT and DNAT on single LR. In order to know if we actually
      * can commit into SNAT zone keep the flag in register. The SNAT flows
      * in the egress pipeline can then check the flag and commit
      * based on that. */
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10,
-                  "ip && ct.new", "flags.unsnat_new = 1; next;", lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10,
-                  "ip && !ct.trk", "flags.unsnat_not_tracked = 1; next;",
-                  lflow_ref);
-
+    if (use_port_nat_zones) {
+        struct ds match = DS_EMPTY_INITIALIZER;
+        ds_put_cstr(&match, "ip && ct.new && "
+                    "flags.skip_snat_for_lb == 0");
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10,
+                      ds_cstr(&match),
+                      "flags.unsnat_new = 1; ct_commit_to_zone(snat);",
+                      lflow_ref);
+        ds_destroy(&match);
+    } else {
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10,
+                      "ip && ct.new", "flags.unsnat_new = 1; next;",
+                      lflow_ref);
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10,
+                      "ip && !ct.trk",
+                      "flags.unsnat_not_tracked = 1; next;", lflow_ref);
+    }
     /* Note: We can use match on "!ct.rpl" as optimization here, even if the
      * previous state is from different zone. The packet that is already reply
      * should be reply in both zones. */
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10,
-                  "ip && (!ct.trk || !ct.rpl) && "
-                  "flags.unsnat_not_tracked == 1", "ct_next(snat);",
-                  lflow_ref);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10,
-                  "ip && flags.unsnat_new == 1", "next;", lflow_ref);
+    if (use_port_nat_zones) {
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_UNDNAT, 10,
+                      "ip && (!ct.trk || !ct.rpl) && "
+                      "flags.skip_snat_for_lb == 0", "ct_next(dnat);",
+                      lflow_ref);
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10,
+                      "ip && ct.new && flags.skip_snat_for_lb == 0",
+                      "ct_commit_to_zone(dnat);", lflow_ref);
+    } else {
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10,
+                      "ip && (!ct.trk || !ct.rpl) && "
+                      "flags.unsnat_not_tracked == 1", "ct_next(snat);",
+                      lflow_ref);
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10,
+                      "ip && flags.unsnat_new == 1", "next;", lflow_ref);
+    }
 
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 10,
-                  "ip && (!ct.trk || !ct.rpl) && flags.unsnat_new == 1",
+                  "ip && (!ct.trk || !ct.rpl) && "
+                  "flags.unsnat_new == 1 && flags.skip_snat_for_lb == 0",
                   "ct_commit_to_zone(snat);", lflow_ref);
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 10,
-                  "ip && ct.new",
+                  "ip && ct.new && flags.skip_snat_for_lb == 0",
                   "ct_commit_to_zone(snat);", lflow_ref);
+}
+
+static void
+build_lrp_same_subnet_match(const struct ovn_port *op, struct ds *match)
+{
+    const char *prefix = "";
+
+    for (size_t i = 0; i < op->lrp_networks.n_ipv4_addrs; i++) {
+        const struct ipv4_netaddr *addr = &op->lrp_networks.ipv4_addrs[i];
+
+        ds_put_format(match, "%s(ip4.src == %s/%u && ip4.dst == %s/%u)",
+                      prefix, addr->network_s, addr->plen,
+                      addr->network_s, addr->plen);
+        prefix = " || ";
+    }
+
+    for (size_t i = 0; i < op->lrp_networks.n_ipv6_addrs; i++) {
+        const struct ipv6_netaddr *addr = &op->lrp_networks.ipv6_addrs[i];
+
+        struct in6_addr network = addr->network;
+
+        if (in6_is_lla(&network)) {
+            continue;
+        }
+        ds_put_format(match, "%s(ip6.src == %s/%u && ip6.dst == %s/%u)",
+                      prefix, addr->network_s, addr->plen,
+                      addr->network_s, addr->plen);
+        prefix = " || ";
+    }
+}
+
+static void
+add_lrp_same_subnet_exclusion(struct ds *same_subnet_match,
+                              struct ds *match)
+{
+    if (same_subnet_match->length) {
+        ds_put_format(match, " && !(%s)", ds_cstr(same_subnet_match));
+    }
 }
 
 static void
@@ -18122,23 +18191,67 @@ build_dgp_lrouter_commit_all(const struct ovn_datapath *od,
     if (!(features->ct_commit_to_zone && features->ct_next_zone)) {
         return;
     }
+    bool use_port_nat_zones = !smap_get(&od->nbr->options, "snat-ct-zone");
+    struct ds same_subnet_match = DS_EMPTY_INITIALIZER;
+
+    build_lrp_same_subnet_match(l3dgw_port, &same_subnet_match);
 
     /* Note: We can use match on "!ct.rpl" as optimization here, even if the
      * previous state is from different zone. The packet that is already reply
      * should be reply in both zones. */
     ds_clear(match);
     ds_put_format(match, "ip && (!ct.trk || !ct.rpl) && "
-                  "inport == %s && is_chassis_resident(%s)",
+                  "flags.skip_snat_for_lb == 0 && inport == %s && "
+                  "is_chassis_resident(%s)",
                   l3dgw_port->json_key, l3dgw_port->cr_port->json_key);
+    add_lrp_same_subnet_exclusion(&same_subnet_match, match);
     ovn_lflow_add(lflows, od, S_ROUTER_IN_DEFRAG, 10, ds_cstr(match),
                   "ct_next(dnat);", lflow_ref);
 
     ds_clear(match);
     ds_put_format(match, "ip && ct.new && inport == %s && "
-                 "is_chassis_resident(%s)", l3dgw_port->json_key,
-                 l3dgw_port->cr_port->json_key);
+                  "is_chassis_resident(%s) && "
+                  "flags.skip_snat_for_lb == 0", l3dgw_port->json_key,
+                  l3dgw_port->cr_port->json_key);
+    add_lrp_same_subnet_exclusion(&same_subnet_match, match);
     ovn_lflow_add(lflows, od, S_ROUTER_IN_DNAT, 10, ds_cstr(match),
                   "ct_commit_to_zone(dnat);", lflow_ref);
+
+    /* Use the ingress port SNAT zone before routing can select a
+     * different outport zone. */
+    if (use_port_nat_zones) {
+        ds_clear(match);
+        ds_put_format(match, "ip && ct.new && "
+                      "flags.unsnat_not_tracked == 1 && "
+                      "inport == %s && is_chassis_resident(%s) && "
+                      "flags.skip_snat_for_lb == 0",
+                      l3dgw_port->json_key,
+                      l3dgw_port->cr_port->json_key);
+        add_lrp_same_subnet_exclusion(&same_subnet_match, match);
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_LB_AFF_LEARN, 10,
+                      ds_cstr(match), "ct_commit_to_zone(snat);",
+                      lflow_ref);
+
+        ds_clear(match);
+        ds_put_format(match, "ip && !ct.new && !ct.rpl && "
+                      "inport == %s && is_chassis_resident(%s) && "
+                      "flags.skip_snat_for_lb == 0",
+                      l3dgw_port->json_key,
+                      l3dgw_port->cr_port->json_key);
+        add_lrp_same_subnet_exclusion(&same_subnet_match, match);
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_LB_AFF_LEARN, 10,
+                      ds_cstr(match), "ct_next(snat);", lflow_ref);
+
+        ds_clear(match);
+        ds_put_format(match, "ip && ct.rpl && "
+                      "inport == %s && is_chassis_resident(%s) && "
+                      "flags.skip_snat_for_lb == 0",
+                      l3dgw_port->json_key,
+                      l3dgw_port->cr_port->json_key);
+        add_lrp_same_subnet_exclusion(&same_subnet_match, match);
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_LB_AFF_LEARN, 10,
+                      ds_cstr(match), "ct_next(snat);", lflow_ref);
+    }
 
     /* We would lose the CT state especially the ct.new flag if we have
      * mixed SNAT and DNAT on single LR. In order to know if we actually
@@ -18149,46 +18262,109 @@ build_dgp_lrouter_commit_all(const struct ovn_datapath *od,
     ds_put_format(match, "ip && ct.new && "
                   "inport == %s && is_chassis_resident(%s)",
                   l3dgw_port->json_key, l3dgw_port->cr_port->json_key);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10, ds_cstr(match),
-                  "flags.unsnat_new = 1; next;", lflow_ref);
-    ds_clear(match);
-    ds_put_format(match, "ip && !ct.trk && "
-                  "inport == %s && is_chassis_resident(%s)",
-                  l3dgw_port->json_key, l3dgw_port->cr_port->json_key);
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10, ds_cstr(match),
-                  "flags.unsnat_not_tracked = 1; next;",
-                  lflow_ref);
-
+    if (use_port_nat_zones) {
+        ds_put_cstr(match, " && flags.skip_snat_for_lb == 0");
+        add_lrp_same_subnet_exclusion(&same_subnet_match, match);
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10,
+                      ds_cstr(match),
+                      "flags.unsnat_new = 1; ct_commit_to_zone(snat);",
+                      lflow_ref);
+        ds_clear(match);
+        ds_put_format(match, "ip && !ct.trk && "
+                      "inport == %s && is_chassis_resident(%s) && "
+                      "flags.skip_snat_for_lb == 0",
+                      l3dgw_port->json_key,
+                      l3dgw_port->cr_port->json_key);
+        add_lrp_same_subnet_exclusion(&same_subnet_match, match);
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10,
+                      ds_cstr(match),
+                      "flags.unsnat_not_tracked = 1; next;", lflow_ref);
+    } else {
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10,
+                      ds_cstr(match), "flags.unsnat_new = 1; next;",
+                      lflow_ref);
+        ds_clear(match);
+        ds_put_format(match, "ip && !ct.trk && "
+                      "inport == %s && is_chassis_resident(%s)",
+                      l3dgw_port->json_key, l3dgw_port->cr_port->json_key);
+        ovn_lflow_add(lflows, od, S_ROUTER_IN_POST_UNSNAT, 10,
+                      ds_cstr(match),
+                      "flags.unsnat_not_tracked = 1; next;", lflow_ref);
+    }
     /* Note: We can use match on "!ct.rpl" as optimization here, even if the
      * previous state is from different zone. The packet that is already reply
      * should be reply in both zones. */
-    ds_clear(match);
-    ds_put_format(match, "ip && (!ct.trk || !ct.rpl) && "
-                  "flags.unsnat_not_tracked == 1 && outport == %s && "
-                  "is_chassis_resident(%s)", l3dgw_port->json_key,
-                  l3dgw_port->cr_port->json_key);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10, ds_cstr(match),
-                  "ct_next(snat);", lflow_ref);
-    ds_clear(match);
-    ds_put_format(match, "ip && flags.unsnat_new == 1 && outport == %s && "
-                  "is_chassis_resident(%s)", l3dgw_port->json_key,
-                  l3dgw_port->cr_port->json_key);
-    ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10, ds_cstr(match),
-                  "next;", lflow_ref);
+    if (use_port_nat_zones) {
+        ds_clear(match);
+        ds_put_format(match, "ip && (!ct.trk || !ct.rpl) && "
+                      "flags.skip_snat_for_lb == 0 && outport == %s && "
+                      "is_chassis_resident(%s)",
+                      l3dgw_port->json_key, l3dgw_port->cr_port->json_key);
+        add_lrp_same_subnet_exclusion(&same_subnet_match, match);
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_UNDNAT, 10, ds_cstr(match),
+                      "ct_next(dnat);", lflow_ref);
+
+        ds_clear(match);
+        ds_put_format(match, "ip && ct.new && outport == %s && "
+                      "is_chassis_resident(%s) && "
+                      "flags.skip_snat_for_lb == 0", l3dgw_port->json_key,
+                      l3dgw_port->cr_port->json_key);
+        add_lrp_same_subnet_exclusion(&same_subnet_match, match);
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10,
+                      ds_cstr(match), "ct_commit_to_zone(dnat);", lflow_ref);
+
+        ds_clear(match);
+        ds_put_format(match, "ip && !ct.new && !ct.rpl && outport == %s && "
+                      "is_chassis_resident(%s) && "
+                      "flags.skip_snat_for_lb == 0", l3dgw_port->json_key,
+                      l3dgw_port->cr_port->json_key);
+        add_lrp_same_subnet_exclusion(&same_subnet_match, match);
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10,
+                      ds_cstr(match), "ct_next(snat);", lflow_ref);
+
+        ds_clear(match);
+        ds_put_format(match, "ip && ct.rpl && outport == %s && "
+                      "is_chassis_resident(%s) && "
+                      "flags.skip_snat_for_lb == 0", l3dgw_port->json_key,
+                      l3dgw_port->cr_port->json_key);
+        add_lrp_same_subnet_exclusion(&same_subnet_match, match);
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10,
+                      ds_cstr(match), "ct_next(snat);", lflow_ref);
+    } else {
+        ds_clear(match);
+        ds_put_format(match, "ip && (!ct.trk || !ct.rpl) && "
+                      "flags.unsnat_not_tracked == 1 && outport == %s && "
+                      "is_chassis_resident(%s)", l3dgw_port->json_key,
+                      l3dgw_port->cr_port->json_key);
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10,
+                      ds_cstr(match), "ct_next(snat);", lflow_ref);
+        ds_clear(match);
+        ds_put_format(match, "ip && flags.unsnat_new == 1 && "
+                      "outport == %s && is_chassis_resident(%s)",
+                      l3dgw_port->json_key, l3dgw_port->cr_port->json_key);
+        ovn_lflow_add(lflows, od, S_ROUTER_OUT_POST_UNDNAT, 10,
+                      ds_cstr(match), "next;", lflow_ref);
+    }
 
     ds_clear(match);
     ds_put_format(match, "ip && (!ct.trk || !ct.rpl) && "
-                  "flags.unsnat_new == 1 && outport == %s && "
+                  "flags.unsnat_new == 1 && "
+                  "flags.skip_snat_for_lb == 0 && outport == %s && "
                   "is_chassis_resident(%s)",
                   l3dgw_port->json_key, l3dgw_port->cr_port->json_key);
+    add_lrp_same_subnet_exclusion(&same_subnet_match, match);
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 10, ds_cstr(match),
                   "ct_commit_to_zone(snat);", lflow_ref);
     ds_clear(match);
     ds_put_format(match, "ip && ct.new && "
-                  "outport == %s && is_chassis_resident(%s)",
-                  l3dgw_port->json_key, l3dgw_port->cr_port->json_key);
+                  "flags.skip_snat_for_lb == 0 && outport == %s && "
+                  "is_chassis_resident(%s)",
+                  l3dgw_port->json_key,
+                  l3dgw_port->cr_port->json_key);
+    add_lrp_same_subnet_exclusion(&same_subnet_match, match);
     ovn_lflow_add(lflows, od, S_ROUTER_OUT_SNAT, 10, ds_cstr(match),
                   "ct_commit_to_zone(snat);", lflow_ref);
+    ds_destroy(&same_subnet_match);
 }
 
 static void
@@ -18545,7 +18721,8 @@ build_lrouter_nat_defrag_and_lb(
 
     if (commit_all && stateful) {
         if (od->is_gw_router) {
-            build_gw_lrouter_commit_all(od, lflows, features, lflow_ref);
+            build_gw_lrouter_commit_all(od, lflows, features,
+                                        lflow_ref);
         }
 
         const struct ovn_port *dgp;
