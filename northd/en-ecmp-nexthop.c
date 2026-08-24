@@ -30,14 +30,28 @@
 struct ovsdb_idl_index *
 ecmp_nexthop_index_create(struct ovsdb_idl *idl)
 {
-    return ovsdb_idl_index_create2(idl, &sbrec_ecmp_nexthop_col_nexthop,
-                                   &sbrec_ecmp_nexthop_col_port);
+    return ovsdb_idl_index_create1(idl, &sbrec_ecmp_nexthop_col_nexthop);
 }
 
 struct ecmp_nexthop_data {
     struct hmap_node hmap_node;
     const struct sbrec_ecmp_nexthop *sb_ecmp_nh;
 };
+
+static const struct sbrec_port_binding *
+mac_binding_owner(struct ovsdb_idl_index *sbrec_port_binding_by_name,
+                  const struct sbrec_port_binding *pb)
+{
+    const char *source_name = smap_get(&pb->options, "mac-binding-source");
+    if (!source_name) {
+        return pb;
+    }
+
+    const struct sbrec_port_binding *source =
+        lport_lookup_by_name(sbrec_port_binding_by_name, source_name);
+    return source && !smap_get(&source->options, "mac-binding-source")
+           ? source : pb;
+}
 
 static uint32_t
 ecmp_nexthop_hash(const char *nexthop, const uint32_t port_key)
@@ -84,6 +98,7 @@ static void
 build_ecmp_nexthop_table(
         struct ovsdb_idl_txn *ovnsb_txn,
         struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
+        struct ovsdb_idl_index *sbrec_port_binding_by_name,
         const struct hmap *routes,
         const struct sbrec_ecmp_nexthop_table *sbrec_ecmp_nexthop_table)
 {
@@ -120,9 +135,11 @@ build_ecmp_nexthop_table(
             sbrec_ecmp_nexthop_set_port(sb_ecmp_nexthop, pr->out_port->sb);
             sbrec_ecmp_nexthop_set_datapath(sb_ecmp_nexthop,
                                             pr->out_port->sb->datapath);
+            const struct sbrec_port_binding *owner = mac_binding_owner(
+                sbrec_port_binding_by_name, pr->out_port->sb);
             const struct sbrec_mac_binding *smb =
                 mac_binding_lookup(sbrec_mac_binding_by_lport_ip,
-                                   pr->out_port->sb->logical_port,
+                                   owner->logical_port,
                                    nexthop);
             if (smb) {
                 sbrec_ecmp_nexthop_set_mac(sb_ecmp_nexthop, smb->mac);
@@ -142,21 +159,6 @@ build_ecmp_nexthop_table(
     hmap_destroy(&sb_nexthops_map);
 }
 
-static struct sbrec_ecmp_nexthop *
-ecmp_nexthop_lookup(struct ovsdb_idl_index *sbrec_ecmp_by_nexthop,
-                    const char *nexthop, const struct sbrec_port_binding *pb)
-{
-    struct sbrec_ecmp_nexthop *ecmp_nh =
-            sbrec_ecmp_nexthop_index_init_row(sbrec_ecmp_by_nexthop);
-    sbrec_ecmp_nexthop_index_set_nexthop(ecmp_nh, nexthop);
-    sbrec_ecmp_nexthop_index_set_port(ecmp_nh, pb);
-    struct sbrec_ecmp_nexthop *retval =
-            sbrec_ecmp_nexthop_index_find(sbrec_ecmp_by_nexthop, ecmp_nh);
-    sbrec_ecmp_nexthop_index_destroy_row(ecmp_nh);
-
-    return retval;
-}
-
 enum engine_input_handler_result
 ecmp_nexthop_mac_binding_handler(struct engine_node *node,
                                  void *data OVS_UNUSED)
@@ -168,7 +170,7 @@ ecmp_nexthop_mac_binding_handler(struct engine_node *node,
                                     "sbrec_port_binding_by_name");
     struct ovsdb_idl_index *sbrec_ecmp_by_nexthop =
         engine_ovsdb_node_get_index(engine_get_input("SB_ecmp_nexthop", node),
-                                    "sbrec_ecmp_nexthop_by_ip_and_port");
+                                    "sbrec_ecmp_nexthop_by_ip");
 
     const struct sbrec_mac_binding *smb;
     SBREC_MAC_BINDING_TABLE_FOR_EACH_TRACKED (smb, mac_binding_table) {
@@ -180,11 +182,20 @@ ecmp_nexthop_mac_binding_handler(struct engine_node *node,
         if (!pb) {
             continue;
         }
-        struct sbrec_ecmp_nexthop *ecmp_nh = ecmp_nexthop_lookup(
-                sbrec_ecmp_by_nexthop, smb->ip, pb);
-        if (ecmp_nh) {
-            sbrec_ecmp_nexthop_set_mac(ecmp_nh, smb->mac);
+        struct sbrec_ecmp_nexthop *target =
+            sbrec_ecmp_nexthop_index_init_row(sbrec_ecmp_by_nexthop);
+        sbrec_ecmp_nexthop_index_set_nexthop(target, smb->ip);
+
+        const struct sbrec_ecmp_nexthop *ecmp_nh;
+        SBREC_ECMP_NEXTHOP_FOR_EACH_EQUAL (ecmp_nh, target,
+                                           sbrec_ecmp_by_nexthop) {
+            const struct sbrec_port_binding *owner = mac_binding_owner(
+                sbrec_port_binding_by_name, ecmp_nh->port);
+            if (owner && !strcmp(owner->logical_port, pb->logical_port)) {
+                sbrec_ecmp_nexthop_set_mac(ecmp_nh, smb->mac);
+            }
         }
+        sbrec_ecmp_nexthop_index_destroy_row(target);
     }
 
     return EN_HANDLED_UNCHANGED;
@@ -212,6 +223,9 @@ en_ecmp_nexthop_run(struct engine_node *node, void *data OVS_UNUSED)
     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip =
         engine_ovsdb_node_get_index(engine_get_input("SB_mac_binding", node),
                                     "sbrec_mac_binding_by_lport_ip");
+    struct ovsdb_idl_index *sbrec_port_binding_by_name =
+        engine_ovsdb_node_get_index(engine_get_input("SB_port_binding", node),
+                                    "sbrec_port_binding_by_name");
     struct ed_type_global_config *global_config =
         engine_get_input_data("global_config", node);
     bool ecmp_nexthop_monitor_en = smap_get_bool(&global_config->nb_options,
@@ -221,6 +235,7 @@ en_ecmp_nexthop_run(struct engine_node *node, void *data OVS_UNUSED)
     if (ecmp_nexthop_monitor_en) {
         build_ecmp_nexthop_table(eng_ctx->ovnsb_idl_txn,
                                  sbrec_mac_binding_by_lport_ip,
+                                 sbrec_port_binding_by_name,
                                  &routes_data->parsed_routes,
                                  sbrec_ecmp_nexthop_table);
     } else {
@@ -232,4 +247,3 @@ en_ecmp_nexthop_run(struct engine_node *node, void *data OVS_UNUSED)
     }
     return EN_UPDATED;
 }
-

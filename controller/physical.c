@@ -2213,6 +2213,16 @@ consider_port_binding(const struct physical_ctx *ctx,
         return;
     }
 
+    const struct sbrec_port_binding *mac_binding_source =
+        lport_get_mac_binding_source(ctx->sbrec_port_binding_by_name,
+                                     binding);
+    if (mac_binding_source &&
+        get_local_datapath(ctx->local_datapaths,
+                           mac_binding_source->datapath->tunnel_key)) {
+        consider_mac_binding_source_flow(binding, mac_binding_source,
+                                         flow_table);
+    }
+
     if (type == LP_VIF) {
         /* Table 104, priority 100.
          * ========================

@@ -36,6 +36,7 @@ enum neigh_of_rule_prio {
     NEIGH_OF_DYNAMIC_MAC_BINDING_PRIO     = 100,
     NEIGH_OF_STATIC_MAC_BINDING_HIGH_PRIO = 150,
     NEIGH_OF_EVPN_MAC_BINDING_HIGH_PRIO   = 200,
+    NEIGH_OF_MAC_BINDING_SOURCE_PRIO      = 250,
 };
 
 void
@@ -45,5 +46,9 @@ consider_neighbor_flow(const struct sbrec_port_binding *,
                        struct ovn_desired_flow_table *,
                        enum neigh_of_rule_prio priority,
                        bool needs_usage_tracking);
+
+void consider_mac_binding_source_flow(
+    const struct sbrec_port_binding *, const struct sbrec_port_binding *,
+    struct ovn_desired_flow_table *);
 
 #endif  /* NEIGHBOR_OF_H */

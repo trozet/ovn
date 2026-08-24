@@ -4192,11 +4192,132 @@ sync_pb_for_lsp(struct ovn_port *op,
     }
 }
 
+static bool
+lrp_same_gateway_chassis(const struct ovn_port *a, const struct ovn_port *b)
+{
+    const char *a_chassis = smap_get(&a->od->nbr->options, "chassis");
+    const char *b_chassis = smap_get(&b->od->nbr->options, "chassis");
+    if (a_chassis || b_chassis) {
+        return a_chassis && b_chassis && !strcmp(a_chassis, b_chassis);
+    }
+
+    if (a->nbrp->ha_chassis_group || b->nbrp->ha_chassis_group) {
+        return a->nbrp->ha_chassis_group == b->nbrp->ha_chassis_group;
+    }
+
+    if (a->nbrp->n_gateway_chassis != b->nbrp->n_gateway_chassis) {
+        return false;
+    }
+    if (!a->nbrp->n_gateway_chassis) {
+        return false;
+    }
+    for (size_t i = 0; i < a->nbrp->n_gateway_chassis; i++) {
+        bool found = false;
+        for (size_t j = 0; j < b->nbrp->n_gateway_chassis; j++) {
+            if (!strcmp(a->nbrp->gateway_chassis[i]->chassis_name,
+                        b->nbrp->gateway_chassis[j]->chassis_name)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static int64_t
+localnet_vlan_tag(const struct ovn_port *localnet)
+{
+    return localnet->nbsp->tag ? *localnet->nbsp->tag : 0;
+}
+
+static bool
+lrp_same_l2_domain(const struct ovn_port *a, const struct ovn_port *b)
+{
+    if (!a->peer || !b->peer || !a->peer->od || !b->peer->od) {
+        return false;
+    }
+    if (a->peer->od == b->peer->od) {
+        return true;
+    }
+
+    const struct ovn_port *a_localnet;
+    VECTOR_FOR_EACH (&a->peer->od->localnet_ports, a_localnet) {
+        const char *a_network = smap_get(&a_localnet->nbsp->options,
+                                         "network_name");
+        if (!a_network) {
+            continue;
+        }
+
+        const struct ovn_port *b_localnet;
+        VECTOR_FOR_EACH (&b->peer->od->localnet_ports, b_localnet) {
+            const char *b_network = smap_get(&b_localnet->nbsp->options,
+                                             "network_name");
+            if (b_network && !strcmp(a_network, b_network) &&
+                localnet_vlan_tag(a_localnet) ==
+                localnet_vlan_tag(b_localnet)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void
+delete_mac_bindings_for_lrp(
+    struct ovsdb_idl_index *sbrec_mac_binding_by_datapath,
+    const struct ovn_port *op)
+{
+    struct sbrec_mac_binding *target = sbrec_mac_binding_index_init_row(
+        sbrec_mac_binding_by_datapath);
+    sbrec_mac_binding_index_set_datapath(target, op->sb->datapath);
+
+    const struct sbrec_mac_binding *mb;
+    SBREC_MAC_BINDING_FOR_EACH_EQUAL (mb, target,
+                                      sbrec_mac_binding_by_datapath) {
+        if (!strcmp(mb->logical_port, op->key)) {
+            sbrec_mac_binding_delete(mb);
+        }
+    }
+    sbrec_mac_binding_index_destroy_row(target);
+}
+
+static const struct ovn_port *
+lrp_mac_binding_source(const struct ovn_port *op, const struct hmap *lr_ports)
+{
+    if (is_cr_port(op)) {
+        return NULL;
+    }
+
+    const char *source_name = smap_get(&op->nbrp->options,
+                                       "mac-binding-source");
+    if (!source_name) {
+        return NULL;
+    }
+
+    const struct ovn_port *source = ovn_port_find(lr_ports, source_name);
+    if (!source || source == op || is_cr_port(source) || !source->nbrp ||
+        smap_get(&source->nbrp->options, "mac-binding-source") ||
+        !lrp_same_gateway_chassis(op, source) ||
+        !lrp_same_l2_domain(op, source)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
+        VLOG_WARN_RL(&rl, "ignoring invalid MAC binding source %s for "
+                     "logical router port %s", source_name, op->key);
+        return NULL;
+    }
+
+    return source;
+}
+
 /* Syncs the SB port binding for the ovn_port 'op' of a logical router port.
  * Caller should make sure that the OVN SB IDL txn is not NULL.  Presently it
  * only sets the port binding options column for the router ports */
 static void
 sync_pb_for_lrp(struct ovn_port *op,
+                const struct hmap *lr_ports,
+                bool mac_binding_source_supported,
                 const struct lr_stateful_table *lr_stateful_table)
 {
     ovs_assert(op->nbrp);
@@ -4246,6 +4367,12 @@ sync_pb_for_lrp(struct ovn_port *op,
         if (chassis_name) {
             smap_add(&new, "l3gateway-chassis", chassis_name);
         }
+    }
+
+    const struct ovn_port *mac_binding_source = mac_binding_source_supported
+        ? lrp_mac_binding_source(op, lr_ports) : NULL;
+    if (mac_binding_source) {
+        smap_add(&new, "mac-binding-source", mac_binding_source->key);
     }
 
     if (op->od->dynamic_routing) {
@@ -4312,6 +4439,7 @@ static void ovn_update_ipv6_opt_for_op(struct ovn_port *op);
 void
 sync_pbs(struct ovsdb_idl_txn *ovnsb_idl_txn, struct hmap *ls_ports,
          struct hmap *lr_ports,
+         bool mac_binding_source_supported,
          const struct lr_stateful_table *lr_stateful_table)
 {
     ovs_assert(ovnsb_idl_txn);
@@ -4322,7 +4450,8 @@ sync_pbs(struct ovsdb_idl_txn *ovnsb_idl_txn, struct hmap *ls_ports,
     }
 
     HMAP_FOR_EACH (op, key_node, lr_ports) {
-        sync_pb_for_lrp(op, lr_stateful_table);
+        sync_pb_for_lrp(op, lr_ports, mac_binding_source_supported,
+                        lr_stateful_table);
     }
 
     ovn_update_ipv6_options(lr_ports);
@@ -4348,18 +4477,22 @@ sync_pbs_for_northd_changed_ovn_ports(
 
 void
 sync_pbs_for_lr_stateful_changes(const struct ovn_datapath *od,
+                                 const struct hmap *lr_ports,
+                                 bool mac_binding_source_supported,
                                  const struct lr_stateful_table *lr_stateful)
 {
     struct ovn_port *op;
     HMAP_FOR_EACH (op, dp_node, &od->ports) {
-        sync_pb_for_lrp(op, lr_stateful);
+        sync_pb_for_lrp(op, lr_ports, mac_binding_source_supported,
+                        lr_stateful);
 
         if (op->peer && op->peer->nbsp) {
             sync_pb_for_lsp(op->peer, lr_stateful);
         }
 
         if (op->cr_port) {
-            sync_pb_for_lrp(op->cr_port, lr_stateful);
+            sync_pb_for_lrp(op->cr_port, lr_ports,
+                            mac_binding_source_supported, lr_stateful);
         }
     }
 }
@@ -4449,13 +4582,15 @@ build_ports(struct ovsdb_idl_txn *ovnsb_txn,
     const struct sbrec_mirror_table *sbrec_mirror_table,
     const struct sbrec_mac_binding_table *sbrec_mac_binding_table,
     const struct sbrec_ha_chassis_group_table *sbrec_ha_chassis_group_table,
+    struct ovsdb_idl_index *sbrec_mac_binding_by_datapath,
     struct ovsdb_idl_index *sbrec_chassis_by_name,
     struct ovsdb_idl_index *sbrec_chassis_by_hostname,
     struct ovsdb_idl_index *sbrec_encap_by_ip,
     struct ovsdb_idl_index *sbrec_ha_chassis_grp_by_name,
     struct hmap *ls_datapaths, struct hmap *lr_datapaths,
     struct hmap *ls_ports, struct hmap *lr_ports,
-    struct hmapx *monitored_ports_map)
+    struct hmapx *monitored_ports_map,
+    bool mac_binding_source_supported)
 {
     struct ovs_list sb_only, nb_only, both;
     /* XXX: Add tag_alloc_table and queue_id_bitmap as part of northd_data
@@ -4568,6 +4703,22 @@ build_ports(struct ovsdb_idl_txn *ovnsb_txn,
         }
         hmap_remove(ports, &op->key_node);
         hmap_insert(lr_ports, &op->key_node, op->key_node.hash);
+    }
+
+    /* Flush follower-owned bindings when its source relationship changes.
+     * This prevents stale rows from becoming active after enabling,
+     * disabling, or changing a source.  Use the existing datapath index so a
+     * configuration change does not require a cluster-wide table scan.
+     */
+    HMAP_FOR_EACH (op, key_node, lr_ports) {
+        const char *old_source = smap_get(&op->sb->options,
+                                          "mac-binding-source");
+        const struct ovn_port *source = mac_binding_source_supported
+            ? lrp_mac_binding_source(op, lr_ports) : NULL;
+        const char *new_source = source ? source->key : NULL;
+        if (!nullable_string_is_equal(old_source, new_source)) {
+            delete_mac_bindings_for_lrp(sbrec_mac_binding_by_datapath, op);
+        }
     }
 
     if (remove_mac_bindings) {
@@ -22034,13 +22185,15 @@ ovnnb_db_run(struct northd_input *input_data,
                 input_data->sbrec_mirror_table,
                 input_data->sbrec_mac_binding_table,
                 input_data->sbrec_ha_chassis_group_table,
+                input_data->sbrec_mac_binding_by_datapath,
                 input_data->sbrec_chassis_by_name,
                 input_data->sbrec_chassis_by_hostname,
                 input_data->sbrec_encap_by_ip,
                 input_data->sbrec_ha_chassis_grp_by_name,
                 &data->ls_datapaths.datapaths, &data->lr_datapaths.datapaths,
                 &data->ls_ports, &data->lr_ports,
-                &data->monitored_ports_map);
+                &data->monitored_ports_map,
+                input_data->features->mac_binding_source);
     build_lb_port_related_data(&data->lr_datapaths, &data->ls_datapaths,
                                &data->lb_datapaths_map,
                                &data->lb_group_datapaths_map);

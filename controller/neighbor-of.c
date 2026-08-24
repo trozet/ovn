@@ -18,7 +18,84 @@
 #include "lflow.h"
 #include "neighbor-of.h"
 #include "openvswitch/match.h"
+#include "openvswitch/ofp-actions.h"
 #include "ovn/logical-fields.h"
+
+static void
+put_resubmit(uint8_t table_id, struct ofpbuf *ofpacts)
+{
+    struct ofpact_resubmit *resubmit = ofpact_put_RESUBMIT(ofpacts);
+    resubmit->in_port = OFPP_IN_PORT;
+    resubmit->table_id = table_id;
+}
+
+static void
+put_stack(enum mf_field_id field, struct ofpact_stack *stack)
+{
+    stack->subfield.field = mf_from_id(field);
+    stack->subfield.ofs = 0;
+    stack->subfield.n_bits = stack->subfield.field->n_bits;
+}
+
+static void
+put_mac_binding_source_actions(const struct sbrec_port_binding *source,
+                               enum mf_field_id port_field, uint8_t table,
+                               struct ofpbuf *ofpacts)
+{
+    put_stack(MFF_METADATA, ofpact_put_STACK_PUSH(ofpacts));
+    put_stack(port_field, ofpact_put_STACK_PUSH(ofpacts));
+    put_load(source->datapath->tunnel_key, MFF_LOG_DATAPATH, 0, 64, ofpacts);
+    put_load(source->tunnel_key, port_field, 0, 32, ofpacts);
+    put_resubmit(table, ofpacts);
+    put_stack(port_field, ofpact_put_STACK_POP(ofpacts));
+    put_stack(MFF_METADATA, ofpact_put_STACK_POP(ofpacts));
+}
+
+/* Add one indirection per MAC binding consumer table.  This keeps the number
+ * of OpenFlow rules proportional to the number of sharing ports plus the
+ * number of bindings owned by SOURCE, instead of cloning every binding into
+ * every sharing datapath.
+ */
+void
+consider_mac_binding_source_flow(const struct sbrec_port_binding *pb,
+                                 const struct sbrec_port_binding *source,
+                                 struct ovn_desired_flow_table *flow_table)
+{
+    struct match match = MATCH_CATCHALL_INITIALIZER;
+    uint64_t stub[1024 / 8];
+    struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(stub);
+
+    match_set_metadata(&match, htonll(pb->datapath->tunnel_key));
+    match_set_reg(&match, MFF_LOG_OUTPORT - MFF_REG0, pb->tunnel_key);
+    put_mac_binding_source_actions(source, MFF_LOG_OUTPORT,
+                                   OFTABLE_MAC_BINDING, &ofpacts);
+    ofctrl_add_flow(flow_table, OFTABLE_MAC_BINDING,
+                    NEIGH_OF_MAC_BINDING_SOURCE_PRIO,
+                    pb->header_.uuid.parts[0], &match, &ofpacts,
+                    &pb->header_.uuid);
+
+    match_init_catchall(&match);
+    match_set_metadata(&match, htonll(pb->datapath->tunnel_key));
+    match_set_reg(&match, MFF_LOG_INPORT - MFF_REG0, pb->tunnel_key);
+
+    ofpbuf_clear(&ofpacts);
+    put_mac_binding_source_actions(source, MFF_LOG_INPORT,
+                                   OFTABLE_MAC_LOOKUP, &ofpacts);
+    ofctrl_add_flow(flow_table, OFTABLE_MAC_LOOKUP,
+                    NEIGH_OF_MAC_BINDING_SOURCE_PRIO,
+                    pb->header_.uuid.parts[0], &match, &ofpacts,
+                    &pb->header_.uuid);
+
+    ofpbuf_clear(&ofpacts);
+    put_mac_binding_source_actions(source, MFF_LOG_INPORT,
+                                   OFTABLE_MAC_CACHE_USE, &ofpacts);
+    ofctrl_add_flow(flow_table, OFTABLE_MAC_CACHE_USE,
+                    NEIGH_OF_MAC_BINDING_SOURCE_PRIO,
+                    pb->header_.uuid.parts[0], &match, &ofpacts,
+                    &pb->header_.uuid);
+
+    ofpbuf_uninit(&ofpacts);
+}
 
 void
 consider_neighbor_flow(const struct sbrec_port_binding *pb,

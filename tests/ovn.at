@@ -5889,6 +5889,127 @@ OVN_CLEANUP([hv1], [hv2])
 AT_CLEANUP
 ])
 
+OVN_FOR_EACH_NORTHD([
+AT_SETUP([shared MAC binding source releases first buffered packet])
+AT_KEYWORDS([mac-binding-source])
+ovn_start
+
+dnl A follower gateway router and the binding source share ext-ls.  An
+dnl external host is attached through a second localnet-backed switch so its
+dnl address is not known to the ext-ls ARP responder.
+check ovn-nbctl lr-add source \
+    -- set Logical_Router source options:chassis=hv1
+check ovn-nbctl lrp-add source source-ext 00:00:00:00:02:02 \
+    172.16.1.4/24 fd00::4/64
+
+check ovn-nbctl lr-add follower \
+    -- set Logical_Router follower options:chassis=hv1
+check ovn-nbctl lrp-add follower follower-int \
+    00:00:00:00:01:01 192.168.1.1/24 fd01::1/64
+check ovn-nbctl lrp-add follower follower-ext \
+    00:00:00:00:02:01 172.16.1.2/24 fd00::2/64
+check ovn-nbctl set Logical_Router_Port follower-ext \
+    options:mac-binding-source=source-ext
+check ovn-nbctl lr-route-add follower 0.0.0.0/0 172.16.1.3 follower-ext
+check ovn-nbctl lr-route-add follower ::/0 fd00::3 follower-ext
+
+check ovn-nbctl ls-add int-ls
+check ovn-nbctl lsp-add-router-port int-ls int-ls-follower follower-int
+check ovn-nbctl lsp-add int-ls vm \
+    -- lsp-set-addresses vm \
+       "f0:00:00:01:02:03 192.168.1.2 fd01::2"
+
+check ovn-nbctl ls-add ext-ls
+check ovn-nbctl lsp-add-router-port ext-ls ext-ls-source source-ext
+check ovn-nbctl lsp-add-router-port ext-ls ext-ls-follower follower-ext
+check ovn-nbctl lsp-add-localnet-port ext-ls ext-ln phys
+
+check ovn-nbctl ls-add outside
+check ovn-nbctl lsp-add outside outside1 \
+    -- lsp-set-addresses outside1 \
+       "f0:00:00:01:02:04 172.16.1.3 fd00::3"
+check ovn-nbctl lsp-add-localnet-port outside outside-ln phys
+
+net_add n1
+i=1
+for chassis in hv1 ext1; do
+    sim_add $chassis
+    as $chassis
+    ovs-vsctl add-br br-phys
+    ovn_attach n1 br-phys 192.168.0.$i
+    check ovs-vsctl set Open_vSwitch . \
+        external_ids:ovn-bridge-mappings=phys:br-phys
+    i=$((i + 1))
+done
+
+check as hv1 ovs-vsctl add-port br-int vm -- \
+    set Interface vm external_ids:iface-id=vm
+check as ext1 ovs-vsctl add-port br-int outside1 -- \
+    set Interface outside1 external_ids:iface-id=outside1 \
+        options:tx_pcap=ext1/outside1-tx.pcap
+
+wait_for_ports_up
+check ovn-nbctl --wait=hv sync
+OVS_WAIT_UNTIL([fetch_column sb:Port_Binding options \
+                logical_port=follower-ext | \
+                grep -q 'mac-binding-source=source-ext'])
+
+dnl Verify that one alias, rather than one copy per source binding, is
+dnl installed in each MAC binding consumer table.
+for table in OFTABLE_MAC_BINDING OFTABLE_MAC_LOOKUP OFTABLE_MAC_CACHE_USE; do
+    OVS_WAIT_UNTIL([test 1 = $(as hv1 ovs-ofctl dump-flows br-int \
+        table=$table | grep -c 'priority=250')])
+done
+
+external_mac=f00000010204
+follower_ext_mac=000000000201
+follower_int_mac=000000000101
+vm_mac=f00000010203
+vm_ip=$(ip_to_hex 192 168 1 2)
+external_ip=$(ip_to_hex 172 16 1 3)
+follower_ext_ip=$(ip_to_hex 172 16 1 2)
+
+dnl Send exactly one IP packet.  It is buffered while follower resolves the
+dnl external host; there is intentionally no application retry.
+packet=${follower_int_mac}${vm_mac}08004500001c0000000040110000${vm_ip}${external_ip}0035111100080000
+check as ext1 reset_pcap_file outside1 ext1/outside1
+check as hv1 ovs-appctl netdev-dummy/receive vm $packet
+
+dnl The reply arrives on the follower port, but learning stores it on the
+dnl source port.  The resulting source row must release the follower packet.
+arp_reply=${follower_ext_mac}${external_mac}08060001080006040002${external_mac}${external_ip}${follower_ext_mac}${follower_ext_ip}
+check as ext1 ovs-appctl netdev-dummy/receive outside1 $arp_reply
+wait_row_count MAC_Binding 1 logical_port=source-ext ip=172.16.1.3 \
+    mac="f0\:00\:00\:01\:02\:04"
+check_row_count MAC_Binding 0 logical_port=follower-ext
+
+expected=${external_mac}${follower_ext_mac}08004500001c000000003f110100${vm_ip}${external_ip}0035111100080000
+echo $expected > first-packet.expected
+OVN_CHECK_PACKETS_CONTAIN([ext1/outside1-tx.pcap],
+                          [first-packet.expected])
+
+dnl Repeat with exactly one IPv6 packet to cover the NDP path.
+vm_ip6=fd010000000000000000000000000002
+external_ip6=fd000000000000000000000000000003
+follower_ext_ip6=fd000000000000000000000000000002
+packet6=${follower_int_mac}${vm_mac}86dd6000000000081140${vm_ip6}${external_ip6}003511110008f490
+check as hv1 ovs-appctl netdev-dummy/receive vm $packet6
+
+na=${follower_ext_mac}${external_mac}86dd6000000000203aff${external_ip6}${follower_ext_ip6}88002c9360000000${external_ip6}0201${external_mac}
+check as ext1 ovs-appctl netdev-dummy/receive outside1 $na
+wait_row_count MAC_Binding 1 logical_port=source-ext ip="fd00\:\:3" \
+    mac="f0\:00\:00\:01\:02\:04"
+check_row_count MAC_Binding 0 logical_port=follower-ext ip="fd00\:\:3"
+
+expected6=${external_mac}${follower_ext_mac}86dd600000000008113f${vm_ip6}${external_ip6}003511110008f490
+echo $expected6 > first-packet6.expected
+OVN_CHECK_PACKETS_CONTAIN([ext1/outside1-tx.pcap],
+                          [first-packet6.expected])
+
+OVN_CLEANUP([hv1], [ext1])
+AT_CLEANUP
+])
+
 # 3 hypervisors, one logical switch, 3 logical ports per hypervisor
 OVN_FOR_EACH_NORTHD([
 AT_SETUP([portsecurity : 3 HVs, 1 LS, 3 lports/HV])

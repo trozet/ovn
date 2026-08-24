@@ -213,6 +213,7 @@ static void run_put_mac_bindings(
     struct ovsdb_idl_txn *ovnsb_idl_txn,
     struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
     struct ovsdb_idl_index *sbrec_port_binding_by_key,
+    struct ovsdb_idl_index *sbrec_port_binding_by_name,
     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip);
 static void wait_put_mac_bindings(void);
 static void send_mac_binding_buffered_pkts(struct rconn *swconn);
@@ -4243,6 +4244,7 @@ pinctrl_run(struct ovsdb_idl_txn *ovnsb_idl_txn,
                          sbrec_mac_binding_by_lport_ip);
     run_put_mac_bindings(ovnsb_idl_txn, sbrec_datapath_binding_by_key,
                          sbrec_port_binding_by_key,
+                         sbrec_port_binding_by_name,
                          sbrec_mac_binding_by_lport_ip);
     run_put_fdbs(ovnsb_idl_txn, sbrec_port_binding_by_key,
                  sbrec_datapath_binding_by_key, sbrec_fdb_by_dp_key_mac,
@@ -4894,6 +4896,7 @@ static void
 run_put_mac_binding(struct ovsdb_idl_txn *ovnsb_idl_txn,
                     struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                     struct ovsdb_idl_index *sbrec_port_binding_by_key,
+                    struct ovsdb_idl_index *sbrec_port_binding_by_name,
                     struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip,
                     const struct mac_binding *mb)
 {
@@ -4908,6 +4911,20 @@ run_put_mac_binding(struct ovsdb_idl_txn *ovnsb_idl_txn,
                      "and port %"PRIu32, mb->data.dp_key, mb->data.port_key);
         return;
     }
+
+    if (!strcmp(pb->type, "chassisredirect")) {
+        const char *distributed_port =
+            smap_get(&pb->options, "distributed-port");
+        if (distributed_port) {
+            const struct sbrec_port_binding *distributed_pb =
+                lport_lookup_by_name(sbrec_port_binding_by_name,
+                                     distributed_port);
+            if (distributed_pb) {
+                pb = distributed_pb;
+            }
+        }
+    }
+    pb = lport_get_mac_binding_owner(sbrec_port_binding_by_name, pb);
 
     /* Convert ethernet argument to string form for database. */
     char mac_string[ETH_ADDR_STRLEN + 1];
@@ -4928,6 +4945,7 @@ static void
 run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
                      struct ovsdb_idl_index *sbrec_datapath_binding_by_key,
                      struct ovsdb_idl_index *sbrec_port_binding_by_key,
+                     struct ovsdb_idl_index *sbrec_port_binding_by_name,
                      struct ovsdb_idl_index *sbrec_mac_binding_by_lport_ip)
 {
     long long now = time_msec();
@@ -4961,6 +4979,7 @@ run_put_mac_bindings(struct ovsdb_idl_txn *ovnsb_idl_txn,
             run_put_mac_binding(ovnsb_idl_txn,
                                 sbrec_datapath_binding_by_key,
                                 sbrec_port_binding_by_key,
+                                sbrec_port_binding_by_name,
                                 sbrec_mac_binding_by_lport_ip, mb);
             mac_binding_remove(&put_mac_bindings, mb);
         }

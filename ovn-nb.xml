@@ -4393,6 +4393,36 @@ or
       </group>
     </group>
 
+    <group title="MAC Binding Sharing">
+      <column name="options" key="mac-binding-source"
+              type='{"type": "string"}'>
+        <p>
+          Configures this logical router port to use the dynamic and static
+          MAC bindings of the named logical router port.  Neighbor learning
+          and active-neighbor probing are performed on the source port, while
+          packets waiting for resolution on this port are resumed when the
+          source binding is learned.
+        </p>
+
+        <p>
+          The source must be a different logical router port, must not itself
+          have a <code>mac-binding-source</code>, and must use the same gateway
+          chassis and physical L2 domain.  Two ports are in the same physical
+          L2 domain when their peer ports are on the same logical switch, or
+          when their peer switches have <code>localnet</code> ports with the
+          same <code>network_name</code> and VLAN tag.  These restrictions
+          prevent bindings from being shared across separate uplinks, even
+          when their next-hop IP addresses overlap.
+        </p>
+
+        <p>
+          <code>ovn-northd</code> ignores invalid relationships.  It publishes
+          valid relationships only after every chassis in the local
+          availability zone reports support for this feature.
+        </p>
+      </column>
+    </group>
+
     <column name="ipv6_prefix">
        This column contains IPv6 prefix obtained by prefix delegation
        router according to RFC 3633
