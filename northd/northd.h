@@ -88,6 +88,7 @@ struct northd_input {
     struct ovsdb_idl_index *sbrec_encap_by_ip;
     struct ovsdb_idl_index *sbrec_ha_chassis_grp_by_name;
     struct ovsdb_idl_index *sbrec_ip_mcast_by_dp;
+    struct ovsdb_idl_index *sbrec_mac_binding_by_datapath;
     struct ovsdb_idl_index *sbrec_fdb_by_dp_and_port;
     struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type;
 };
@@ -1043,6 +1044,7 @@ const struct ovn_datapath *northd_get_datapath_for_port(
 struct lr_stateful_table;
 void sync_pbs(struct ovsdb_idl_txn *, struct hmap *ls_ports,
               struct hmap *lr_ports,
+              bool mac_binding_source_supported,
               const struct lr_stateful_table *);
 void sync_pbs_for_northd_changed_ovn_ports(
     struct tracked_ovn_ports *,
@@ -1050,6 +1052,8 @@ void sync_pbs_for_northd_changed_ovn_ports(
 
 void sync_pbs_for_lr_stateful_changes(
     const struct ovn_datapath *od,
+    const struct hmap *lr_ports,
+    bool mac_binding_source_supported,
     const struct lr_stateful_table *lr_stateful);
 
 static inline bool

@@ -520,6 +520,7 @@ northd_enable_all_features(struct ed_type_global_config *data)
         .ct_next_zone = true,
         .ct_label_flush = true,
         .ct_state_save = true,
+        .mac_binding_source = true,
     };
 }
 
@@ -589,6 +590,14 @@ build_chassis_features(const struct sbrec_chassis_table *sbrec_chassis_table,
         if (!ct_state_save &&
             chassis_features->ct_state_save) {
             chassis_features->ct_state_save = false;
+        }
+
+        bool mac_binding_source =
+                smap_get_bool(&chassis->other_config,
+                              OVN_FEATURE_MAC_BINDING_SOURCE,
+                              false);
+        if (!mac_binding_source && chassis_features->mac_binding_source) {
+            chassis_features->mac_binding_source = false;
         }
     }
 }
@@ -744,6 +753,10 @@ chassis_features_changed(const struct chassis_features *present,
     }
 
     if (present->ct_state_save != updated->ct_state_save) {
+        return true;
+    }
+
+    if (present->mac_binding_source != updated->mac_binding_source) {
         return true;
     }
 

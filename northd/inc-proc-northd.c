@@ -466,6 +466,7 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
                      sync_to_sb_pb_northd_handler);
     engine_add_input(&en_sync_to_sb_pb, &en_lr_stateful,
                      sync_to_sb_pb_lr_stateful_handler);
+    engine_add_input(&en_sync_to_sb_pb, &en_global_config, NULL);
 
     /* en_sync_to_sb engine node syncs the SB database tables from
      * the NB database tables.
@@ -590,11 +591,11 @@ void inc_proc_northd_init(struct ovsdb_idl_loop *nb,
                                 "nbrec_mirror_by_type_and_sink",
                                 nbrec_mirror_by_type_and_sink);
 
-    struct ovsdb_idl_index *sbrec_ecmp_nexthop_by_ip_and_port
+    struct ovsdb_idl_index *sbrec_ecmp_nexthop_by_ip
         = ecmp_nexthop_index_create(sb->idl);
     engine_ovsdb_node_add_index(&en_sb_ecmp_nexthop,
-                                "sbrec_ecmp_nexthop_by_ip_and_port",
-                                sbrec_ecmp_nexthop_by_ip_and_port);
+                                "sbrec_ecmp_nexthop_by_ip",
+                                sbrec_ecmp_nexthop_by_ip);
 
     struct ovsdb_idl_index *sbrec_service_monitor_by_learned_type
         = ovsdb_idl_index_create1(sb->idl,
@@ -694,6 +695,8 @@ chassis_features_list(struct unixctl_conn *conn, int argc OVS_UNUSED,
                   features->ct_label_flush ? "true" : "false");
     ds_put_format(&ds, "ct_state_save: %s\n",
                   features->ct_state_save ? "true" : "false");
+    ds_put_format(&ds, "mac_binding_source: %s\n",
+                  features->mac_binding_source ? "true" : "false");
 
     unixctl_command_reply(conn, ds_cstr(&ds));
     ds_destroy(&ds);

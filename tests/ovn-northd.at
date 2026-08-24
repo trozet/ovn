@@ -17037,6 +17037,109 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([MAC binding source - validation and feature negotiation])
+AT_KEYWORDS([mac-binding-source])
+ovn_start
+
+# Keep the feature disabled until this chassis advertises support.
+check ovn-sbctl chassis-add gw geneve 127.0.0.1
+
+check ovn-nbctl --wait=sb \
+    -- lr-add source \
+    -- set Logical_Router source options:chassis=gw \
+    -- lrp-add source source-ext 00:00:00:00:01:01 192.0.2.2/24 \
+    -- ls-add source-ls \
+    -- lsp-add source-ls source-ls-source \
+    -- lsp-set-type source-ls-source router \
+    -- lsp-set-options source-ls-source router-port=source-ext \
+    -- lsp-add source-ls source-ln \
+    -- lsp-set-type source-ln localnet \
+    -- lsp-set-options source-ln network_name=phys \
+    -- set Logical_Switch_Port source-ln tag_request=10 \
+    -- lr-add follower \
+    -- set Logical_Router follower options:chassis=gw \
+    -- lrp-add follower follower-ext 00:00:00:00:02:01 192.0.2.3/24 \
+    -- set Logical_Router_Port follower-ext \
+           options:mac-binding-source=source-ext \
+    -- ls-add follower-ls \
+    -- lsp-add follower-ls follower-ls-follower \
+    -- lsp-set-type follower-ls-follower router \
+    -- lsp-set-options follower-ls-follower router-port=follower-ext \
+    -- lsp-add follower-ls follower-ln \
+    -- lsp-set-type follower-ln localnet \
+    -- lsp-set-options follower-ln network_name=phys \
+    -- set Logical_Switch_Port follower-ln tag_request=10
+
+AT_CHECK([fetch_column sb:Port_Binding options \
+          logical_port=follower-ext | grep -qv mac-binding-source])
+
+# A pre-existing follower binding is removed when support becomes available.
+follower_dp=$(fetch_column datapath_binding _uuid external_ids:name=follower)
+check_uuid ovn-sbctl create MAC_Binding ip=192.0.2.1 \
+    datapath=$follower_dp logical_port=follower-ext \
+    mac="00\:00\:00\:00\:ff\:01"
+check_row_count MAC_Binding 1 logical_port=follower-ext
+
+check ovn-sbctl set Chassis gw other_config:mac-binding-source=true
+OVS_WAIT_UNTIL([fetch_column sb:Port_Binding options \
+                logical_port=follower-ext | \
+                grep -q 'mac-binding-source=source-ext'])
+wait_row_count MAC_Binding 0 logical_port=follower-ext
+
+# ECMP monitoring keeps the follower port/datapath for conntrack, but gets
+# the next-hop MAC from the configured binding source.
+source_dp=$(fetch_column datapath_binding _uuid external_ids:name=source)
+check_uuid ovn-sbctl create MAC_Binding ip=192.0.2.1 \
+    datapath=$source_dp logical_port=source-ext \
+    mac="00\:00\:00\:00\:ff\:02"
+check ovn-nbctl set NB_Global . options:ecmp_nexthop_monitor_enable=true
+check ovn-nbctl --wait=sb --ecmp-symmetric-reply lr-route-add follower \
+    198.51.100.1/32 192.0.2.1 follower-ext
+follower_port=$(fetch_column Port_Binding _uuid logical_port=follower-ext)
+check_column "$follower_port" ECMP_Nexthop port nexthop=192.0.2.1
+check_column "00:00:00:00:ff:02" ECMP_Nexthop mac nexthop=192.0.2.1
+
+source_mb=$(fetch_column MAC_Binding _uuid logical_port=source-ext \
+            ip=192.0.2.1)
+check ovn-sbctl set MAC_Binding $source_mb mac="00\:00\:00\:00\:ff\:03"
+OVS_WAIT_UNTIL([test '00:00:00:00:ff:03' = \
+    "$(fetch_column ECMP_Nexthop mac nexthop=192.0.2.1)"])
+
+# A different VLAN is a different physical L2 domain and is rejected.
+check ovn-nbctl --wait=sb \
+    -- lr-add wrong-vlan \
+    -- set Logical_Router wrong-vlan options:chassis=gw \
+    -- lrp-add wrong-vlan wrong-vlan-ext 00:00:00:00:03:01 192.0.2.4/24 \
+    -- set Logical_Router_Port wrong-vlan-ext \
+           options:mac-binding-source=source-ext \
+    -- ls-add wrong-vlan-ls \
+    -- lsp-add wrong-vlan-ls wrong-vlan-ls-router \
+    -- lsp-set-type wrong-vlan-ls-router router \
+    -- lsp-set-options wrong-vlan-ls-router router-port=wrong-vlan-ext \
+    -- lsp-add wrong-vlan-ls wrong-vlan-ln \
+    -- lsp-set-type wrong-vlan-ln localnet \
+    -- lsp-set-options wrong-vlan-ln network_name=phys \
+    -- set Logical_Switch_Port wrong-vlan-ln tag_request=20
+
+AT_CHECK([fetch_column sb:Port_Binding options \
+          logical_port=wrong-vlan-ext | grep -qv mac-binding-source])
+
+# Removing a relationship also flushes stale follower-owned bindings before
+# the port returns to using its own MAC binding table.
+check_uuid ovn-sbctl create MAC_Binding ip=192.0.2.10 \
+    datapath=$follower_dp logical_port=follower-ext \
+    mac="00\:00\:00\:00\:ff\:10"
+check ovn-nbctl clear Logical_Router_Port follower-ext options
+OVS_WAIT_UNTIL([fetch_column sb:Port_Binding options \
+                logical_port=follower-ext | \
+                grep -qv mac-binding-source])
+wait_row_count MAC_Binding 0 logical_port=follower-ext
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([dynamic-routing - lrp options])
 AT_KEYWORDS([dynamic-routing])
 ovn_start

@@ -386,9 +386,12 @@ en_sync_to_sb_pb_run(struct engine_node *node, void *data OVS_UNUSED)
     struct northd_data *northd_data = engine_get_input_data("northd", node);
     struct ed_type_lr_stateful *lr_stateful_data =
         engine_get_input_data("lr_stateful", node);
+    struct ed_type_global_config *global_config =
+        engine_get_input_data("global_config", node);
 
     sync_pbs(eng_ctx->ovnsb_idl_txn, &northd_data->ls_ports,
              &northd_data->lr_ports,
+             global_config->features.mac_binding_source,
              &lr_stateful_data->table);
     return EN_UPDATED;
 }
@@ -423,6 +426,8 @@ sync_to_sb_pb_lr_stateful_handler(struct engine_node *node,
     struct ed_type_lr_stateful *lr_stateful_data =
         engine_get_input_data("lr_stateful", node);
     struct northd_data *northd_data = engine_get_input_data("northd", node);
+    struct ed_type_global_config *global_config =
+        engine_get_input_data("global_config", node);
 
     const struct ovn_datapaths *lr_datapaths = &northd_data->lr_datapaths;
     struct hmapx_node *hmapx_node;
@@ -431,8 +436,10 @@ sync_to_sb_pb_lr_stateful_handler(struct engine_node *node,
         const struct ovn_datapath *od =
             ovn_datapaths_find_by_index(lr_datapaths,
                                         lr_stateful_rec->lr_index);
-        sync_pbs_for_lr_stateful_changes(od,
-                                         &lr_stateful_data->table);
+        sync_pbs_for_lr_stateful_changes(
+            od, &northd_data->lr_ports,
+            global_config->features.mac_binding_source,
+            &lr_stateful_data->table);
     }
 
     return EN_HANDLED_UPDATED;
