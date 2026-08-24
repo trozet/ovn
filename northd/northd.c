@@ -10891,6 +10891,59 @@ build_gw_lrouter_nat_flows_for_lb(struct lrouter_nat_lb_flows_ctx *ctx,
     bitmap_free(dp_non_meter);
 }
 
+static bool
+lport_addresses_contains_vip(const struct lport_addresses *addresses,
+                             const char *vip)
+{
+    ovs_be32 ipv4;
+    if (ip_parse(vip, &ipv4)) {
+        for (size_t i = 0; i < addresses->n_ipv4_addrs; i++) {
+            if (addresses->ipv4_addrs[i].addr == ipv4) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    struct in6_addr ipv6;
+    if (ipv6_parse(vip, &ipv6)) {
+        for (size_t i = 0; i < addresses->n_ipv6_addrs; i++) {
+            if (IN6_ARE_ADDR_EQUAL(&addresses->ipv6_addrs[i].addr, &ipv6)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static bool
+lrouter_lb_vip_is_unsnat_ip(const struct ovn_datapath *od,
+                            const char *vip)
+{
+    if (lport_addresses_contains_vip(&od->dnat_force_snat_addrs, vip)
+        || lport_addresses_contains_vip(&od->lb_force_snat_addrs, vip)) {
+        return true;
+    }
+
+    if (!od->lb_force_snat_router_ip) {
+        return false;
+    }
+
+    const struct ovn_port *op;
+    LIST_FOR_EACH (op, dp_node, &od->port_list) {
+        if (op->peer &&
+            ((op->lrp_networks.n_ipv4_addrs &&
+              !strcmp(op->lrp_networks.ipv4_addrs[0].addr_s, vip)) ||
+             (op->lrp_networks.n_ipv6_addrs > 1 &&
+              !strcmp(op->lrp_networks.ipv6_addrs[0].addr_s, vip)))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static void
 build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
                                struct ovn_northd_lb *lb,
@@ -10913,6 +10966,7 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
     struct ds skip_snat_act = DS_EMPTY_INITIALIZER;
     struct ds force_snat_act = DS_EMPTY_INITIALIZER;
     struct ds undnat_match = DS_EMPTY_INITIALIZER;
+    struct ds unsnat_match = DS_EMPTY_INITIALIZER;
 
     ds_clear(match);
     ds_clear(action);
@@ -10955,6 +11009,13 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
     }
     /* Remove the trailing " || ". */
     ds_truncate(&undnat_match, undnat_match.length - 4);
+
+    ds_put_format(&unsnat_match, "%s && %s.dst == %s && %s",
+                  ip_match, ip_match, lb_vip->vip_str, lb->proto);
+    if (lb_vip->port_str) {
+        ds_put_format(&unsnat_match, " && %s.dst == %s", lb->proto,
+                      lb_vip->port_str);
+    }
 
     struct lrouter_nat_lb_flows_ctx ctx = {
         .lb_vip = lb_vip,
@@ -11006,6 +11067,22 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
         if (lb->affinity_timeout) {
             bitmap_set1(aff_dp_bitmap[type], index);
         }
+
+        if (lrouter_lb_vip_is_unsnat_ip(od, lb_vip->vip_str)) {
+            /* The load balancer VIP is also present in an UNSNAT flow.
+             * Add a high priority lflow to advance packets destined to the
+             * VIP (and the VIP port if defined) in S_ROUTER_IN_UNSNAT.
+             * There seems to be an issue with ovs-vswitchd. When the new
+             * connection packet destined for the LB VIP is received,
+             * it is DNATed in the S_ROUTER_IN_DNAT stage in the DNAT
+             * conntrack zone. For the next packet, if it goes through
+             * UNSNAT stage, the conntrack flags are not set properly, and
+             * it doesn't hit the established state flows in
+             * S_ROUTER_IN_DNAT stage. */
+            ovn_lflow_add_with_hint(lflows, od, S_ROUTER_IN_UNSNAT, 120,
+                                    ds_cstr(&unsnat_match), "next;",
+                                    &lb->nlb->header_);
+        }
     }
 
     for (size_t type = 0; type < LROUTER_NAT_LB_FLOW_MAX; type++) {
@@ -11016,6 +11093,7 @@ build_lrouter_nat_flows_for_lb(struct ovn_lb_vip *lb_vip,
                                    lr_datapaths);
     }
 
+    ds_destroy(&unsnat_match);
     ds_destroy(&undnat_match);
     ds_destroy(&skip_snat_act);
     ds_destroy(&force_snat_act);
