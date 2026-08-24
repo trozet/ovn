@@ -168,6 +168,42 @@ lport_get_cr_port(struct ovsdb_idl_index *sbrec_port_binding_by_name,
     return lport_lookup_by_name(sbrec_port_binding_by_name, crp_name);
 }
 
+/* Returns the port binding named by PB's "mac-binding-source" option.
+ *
+ * MAC binding sources are intentionally limited to one level.  Northd
+ * validates this relationship before publishing it, but ovn-controller must
+ * also handle manually edited or transiently inconsistent southbound data.
+ */
+const struct sbrec_port_binding *
+lport_get_mac_binding_source(
+    struct ovsdb_idl_index *sbrec_port_binding_by_name,
+    const struct sbrec_port_binding *pb)
+{
+    const char *source_name = smap_get(&pb->options, "mac-binding-source");
+    if (!source_name || !source_name[0]) {
+        return NULL;
+    }
+
+    const struct sbrec_port_binding *source =
+        lport_lookup_by_name(sbrec_port_binding_by_name, source_name);
+    if (!source || source == pb || !source->datapath ||
+        smap_get(&source->options, "mac-binding-source")) {
+        return NULL;
+    }
+
+    return source;
+}
+
+const struct sbrec_port_binding *
+lport_get_mac_binding_owner(
+    struct ovsdb_idl_index *sbrec_port_binding_by_name,
+    const struct sbrec_port_binding *pb)
+{
+    const struct sbrec_port_binding *source =
+        lport_get_mac_binding_source(sbrec_port_binding_by_name, pb);
+    return source ? source : pb;
+}
+
 enum can_bind
 lport_can_bind_on_this_chassis(const struct sbrec_chassis *chassis_rec,
                                const struct sbrec_port_binding *pb)

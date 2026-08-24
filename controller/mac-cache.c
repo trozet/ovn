@@ -65,6 +65,11 @@ buffered_packets_find(struct cmap *bp_map,
 static void
 buffered_packets_free(struct buffered_packets *bp);
 
+static const struct sbrec_port_binding *buffered_packets_binding_owner(
+    const struct buffered_packets *, struct ovsdb_idl_index *sbrec_pb_by_key,
+    struct ovsdb_idl_index *sbrec_dp_by_key,
+    struct ovsdb_idl_index *sbrec_pb_by_name);
+
 static void
 buffered_packets_db_lookup(struct buffered_packets *bp,
                            struct ds *ip, struct eth_addr *mac,
@@ -625,7 +630,17 @@ buffered_packets_lookup_run(struct cmap *bp_map, const struct hmap *recent_mbs,
 
         struct eth_addr mac = eth_addr_zero;
 
-        struct mac_binding *mb = mac_binding_find(recent_mbs, &bp->mb_data);
+        struct mac_binding_data lookup_data = bp->mb_data;
+        const struct sbrec_port_binding *owner =
+            buffered_packets_binding_owner(bp, sbrec_pb_by_key,
+                                           sbrec_dp_by_key,
+                                           sbrec_pb_by_name);
+        if (owner) {
+            lookup_data.dp_key = owner->datapath->tunnel_key;
+            lookup_data.port_key = owner->tunnel_key;
+        }
+
+        struct mac_binding *mb = mac_binding_find(recent_mbs, &lookup_data);
         if (mb) {
             mac = mb->data.mac;
         } else if (now >= bp->lookup_at_ms) {
@@ -810,6 +825,32 @@ buffered_packets_free(struct buffered_packets *bp) {
     free(bp);
 }
 
+static const struct sbrec_port_binding *
+buffered_packets_binding_owner(
+    const struct buffered_packets *bp,
+    struct ovsdb_idl_index *sbrec_pb_by_key,
+    struct ovsdb_idl_index *sbrec_dp_by_key,
+    struct ovsdb_idl_index *sbrec_pb_by_name)
+{
+    const struct sbrec_port_binding *pb =
+        lport_lookup_by_key(sbrec_dp_by_key, sbrec_pb_by_key,
+                            bp->mb_data.dp_key, bp->mb_data.port_key);
+    if (!pb) {
+        return NULL;
+    }
+
+    if (!strcmp(pb->type, "chassisredirect")) {
+        const char *dgp_name =
+            smap_get_def(&pb->options, "distributed-port", "");
+        pb = lport_lookup_by_name(sbrec_pb_by_name, dgp_name);
+        if (!pb) {
+            return NULL;
+        }
+    }
+
+    return lport_get_mac_binding_owner(sbrec_pb_by_name, pb);
+}
+
 static void
 buffered_packets_db_lookup(struct buffered_packets *bp, struct ds *ip,
                            struct eth_addr *mac,
@@ -817,20 +858,10 @@ buffered_packets_db_lookup(struct buffered_packets *bp, struct ds *ip,
                            struct ovsdb_idl_index *sbrec_dp_by_key,
                            struct ovsdb_idl_index *sbrec_pb_by_name,
                            struct ovsdb_idl_index *sbrec_mb_by_lport_ip) {
-    const struct sbrec_port_binding *pb =
-            lport_lookup_by_key(sbrec_dp_by_key, sbrec_pb_by_key,
-                                bp->mb_data.dp_key, bp->mb_data.port_key);
+    const struct sbrec_port_binding *pb = buffered_packets_binding_owner(
+        bp, sbrec_pb_by_key, sbrec_dp_by_key, sbrec_pb_by_name);
     if (!pb) {
         return;
-    }
-
-    if (!strcmp(pb->type, "chassisredirect")) {
-        const char *dgp_name =
-                smap_get_def(&pb->options, "distributed-port", "");
-        pb = lport_lookup_by_name(sbrec_pb_by_name, dgp_name);
-        if (!pb) {
-            return;
-        }
     }
 
     ipv6_format_mapped(&bp->mb_data.ip, ip);

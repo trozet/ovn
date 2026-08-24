@@ -355,7 +355,10 @@ send_garp_locally(const struct garp_rarp_ctx_in *r_ctx_in,
             continue;
         }
 
-        bool update_only = !smap_get_bool(&remote->datapath->external_ids,
+        const struct sbrec_port_binding *owner =
+            lport_get_mac_binding_owner(
+                r_ctx_in->sbrec_port_binding_by_name, remote);
+        bool update_only = !smap_get_bool(&owner->datapath->external_ids,
                                           "always_learn_from_arp_request",
                                           true);
 
@@ -364,7 +367,7 @@ send_garp_locally(const struct garp_rarp_ctx_in *r_ctx_in,
         ip_format_masked(ip, OVS_BE32_MAX, &ip_s);
         mac_binding_add_to_sb(r_ctx_in->ovnsb_idl_txn,
                               r_ctx_in->sbrec_mac_binding_by_lport_ip,
-                              remote->logical_port, remote->datapath,
+                              owner->logical_port, owner->datapath,
                               ea, ds_cstr(&ip_s), update_only);
         ds_destroy(&ip_s);
     }
