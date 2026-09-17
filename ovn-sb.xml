@@ -1634,12 +1634,15 @@
           <p><b>Prerequisite:</b> <code>ip4</code></p>
         </dd>
 
-        <dt><code>get_arp(<var>P</var>, <var>A</var>);</code></dt>
+        <dt>
+          <code>get_arp(<var>P</var>, <var>A</var>[, <var>S</var>]);</code>
+        </dt>
 
         <dd>
           <p>
             <b>Parameters</b>: logical port string field <var>P</var>, 32-bit
-            IP address field <var>A</var>.
+            IP address field <var>A</var>, optional MAC binding scope key
+            <var>S</var>.
           </p>
 
           <p>
@@ -1647,6 +1650,13 @@
             If an entry is found, stores its Ethernet address in
             <code>eth.dst</code>, otherwise stores
             <code>00:00:00:00:00:00</code> in <code>eth.dst</code>.
+          </p>
+
+          <p>
+            If <var>S</var> is specified, the shared dynamic binding in scope
+            <var>S</var> takes precedence over a private dynamic or
+            low-priority binding on <var>P</var>.  A high-priority binding
+            on <var>P</var> still takes precedence over the shared binding.
           </p>
 
           <p><b>Example:</b> <code>get_arp(outport, ip4.dst);</code></p>
@@ -1673,14 +1683,15 @@
         </dd>
 
         <dt>
-          <code><var>R</var> = lookup_arp(<var>P</var>, <var>A</var>, <var>M</var>);</code>
+          <code><var>R</var> = lookup_arp(<var>P</var>, <var>A</var>,
+          <var>M</var>[, <var>S</var>]);</code>
         </dt>
 
         <dd>
           <p>
             <b>Parameters</b>: logical port string field <var>P</var>, 32-bit
             IP address field <var>A</var>, 48-bit MAC address field
-            <var>M</var>.
+            <var>M</var>, optional MAC binding scope key <var>S</var>.
           </p>
 
           <p>
@@ -1694,6 +1705,12 @@
           </p>
 
           <p>
+            If <var>S</var> is specified, lookup uses the same private
+            fallback, shared dynamic, and high-priority precedence as
+            <code>get_arp</code>.
+          </p>
+
+          <p>
             <b>Example:</b>
             <code>
               reg0[0] = lookup_arp(inport, arp.spa, arp.sha);
@@ -1702,13 +1719,15 @@
         </dd>
 
         <dt>
-          <code><var>R</var> = lookup_arp_ip(<var>P</var>, <var>A</var>);</code>
+          <code><var>R</var> = lookup_arp_ip(<var>P</var>, <var>A</var>[,
+          <var>S</var>]);</code>
         </dt>
 
         <dd>
           <p>
             <b>Parameters</b>: logical port string field <var>P</var>, 32-bit
-            IP address field <var>A</var>.
+            IP address field <var>A</var>, optional MAC binding scope key
+            <var>S</var>.
           </p>
 
           <p>
@@ -1719,6 +1738,12 @@
             Looks up <var>A</var> in <var>P</var>'s mac binding table. If an
             entry is found, stores <code>1</code> in the 1-bit subfield
             <var>R</var>, else 0.
+          </p>
+
+          <p>
+            If <var>S</var> is specified, lookup uses the same private
+            fallback, shared dynamic, and high-priority precedence as
+            <code>get_arp</code>.
           </p>
 
           <p>
@@ -2036,12 +2061,15 @@
           </p>
         </dd>
 
-        <dt><code>get_nd(<var>P</var>, <var>A</var>);</code></dt>
+        <dt>
+          <code>get_nd(<var>P</var>, <var>A</var>[, <var>S</var>]);</code>
+        </dt>
 
         <dd>
           <p>
             <b>Parameters</b>: logical port string field <var>P</var>, 128-bit
-            IPv6 address field <var>A</var>.
+            IPv6 address field <var>A</var>, optional MAC binding scope key
+            <var>S</var>.
           </p>
 
           <p>
@@ -2049,6 +2077,13 @@
             If an entry is found, stores its Ethernet address in
             <code>eth.dst</code>, otherwise stores
             <code>00:00:00:00:00:00</code> in <code>eth.dst</code>.
+          </p>
+
+          <p>
+            If <var>S</var> is specified, the shared dynamic binding in scope
+            <var>S</var> takes precedence over a private dynamic or
+            low-priority binding on <var>P</var>.  A high-priority binding
+            on <var>P</var> still takes precedence over the shared binding.
           </p>
 
           <p><b>Example:</b> <code>get_nd(outport, ip6.dst);</code></p>
@@ -2074,14 +2109,15 @@
           <p><b>Example:</b> <code>put_nd(inport, nd.target, nd.tll);</code></p>
         </dd>
 
-        <dt><code><var>R</var> = lookup_nd(<var>P</var>, <var>A</var>, <var>M</var>);</code>
+        <dt><code><var>R</var> = lookup_nd(<var>P</var>, <var>A</var>,
+          <var>M</var>[, <var>S</var>]);</code>
         </dt>
 
         <dd>
           <p>
             <b>Parameters</b>: logical port string field <var>P</var>, 128-bit
             IP address field <var>A</var>, 48-bit MAC address field
-            <var>M</var>.
+            <var>M</var>, optional MAC binding scope key <var>S</var>.
           </p>
 
           <p>
@@ -2095,6 +2131,12 @@
           </p>
 
           <p>
+            If <var>S</var> is specified, lookup uses the same private
+            fallback, shared dynamic, and high-priority precedence as
+            <code>get_nd</code>.
+          </p>
+
+          <p>
             <b>Example:</b>
             <code>
               reg0[0] = lookup_nd(inport, ip6.src, eth.src);
@@ -2102,13 +2144,15 @@
           </p>
         </dd>
 
-        <dt><code><var>R</var> = lookup_nd_ip(<var>P</var>, <var>A</var>);</code>
+        <dt><code><var>R</var> = lookup_nd_ip(<var>P</var>, <var>A</var>[,
+          <var>S</var>]);</code>
         </dt>
 
         <dd>
           <p>
             <b>Parameters</b>: logical port string field <var>P</var>, 128-bit
-            IP address field <var>A</var>.
+            IP address field <var>A</var>, optional MAC binding scope key
+            <var>S</var>.
           </p>
 
           <p>
@@ -2119,6 +2163,12 @@
             Looks up <var>A</var> in <var>P</var>'s mac binding table. If an
             entry is found, stores <code>1</code> in the 1-bit subfield
             <var>R</var>, else 0.
+          </p>
+
+          <p>
+            If <var>S</var> is specified, lookup uses the same private
+            fallback, shared dynamic, and high-priority precedence as
+            <code>get_nd</code>.
           </p>
 
           <p>
@@ -3012,11 +3062,13 @@ tcp.flags = RST;
           </dl>
         </dd>
 
-        <dt><code>mac_cache_use;</code></dt>
+        <dt><code>mac_cache_use[(<var>S</var>)];</code></dt>
         <dd>
           <p>
             This action resubmits to corresponding table which updates the
-            use statistics of MAC cache.
+            use statistics of MAC cache.  When the optional MAC binding scope
+            key <var>S</var> is specified, it updates use statistics for the
+            shared binding instead of a private per-port binding.
           </p>
         </dd>
 
@@ -3507,6 +3559,17 @@ tcp.flags = RST;
         that logical switch ports and router port names must not share names in
         an OVN deployment.) OVN does not prescribe a particular format for the
         logical port ID.
+      </column>
+
+      <column name="mac_binding_scope">
+        <p>
+          For a logical router port that participates in shared dynamic MAC
+          binding state, this references the corresponding <ref
+          table="MAC_Binding_Scope"/>.  It is populated by
+          <code>ovn-northd</code> only after validating that all members are
+          co-located on the same physical L2 broadcast domain and all relevant
+          chassis support the feature.
+        </p>
       </column>
 
       <column name="encap">
@@ -4386,6 +4449,77 @@ tcp.flags = RST;
 
     <column name="datapath">
       The logical datapath to which the logical port belongs.
+    </column>
+  </table>
+
+  <table name="MAC_Binding_Scope" title="Shared MAC binding scopes">
+    <p>
+      Each row represents a validated group of logical router ports that use
+      the same dynamically learned IP-to-MAC bindings.  <code>ovn-northd</code>
+      creates and maintains these rows from the corresponding
+      <ref table="MAC_Binding_Scope" db="OVN_Northbound"/> records.
+    </p>
+
+    <column name="name">
+      The name copied from the corresponding northbound scope.
+    </column>
+
+    <column name="binding_key">
+      <p>
+        A locally significant identifier used by <code>ovn-controller</code>
+        to represent this scope in the MAC binding OpenFlow lookup tables.
+        The key is unique among scope rows.
+      </p>
+    </column>
+
+    <column name="always_learn_from_arp_request">
+      The scope-wide value copied from the corresponding northbound scope.
+      An empty value means <code>true</code>.
+    </column>
+
+    <column name="disable_garp_rarp">
+      The scope-wide value copied from the corresponding northbound scope.
+      An empty value means <code>false</code>.
+    </column>
+
+    <column name="mac_binding_age_threshold">
+      The optional scope-wide MAC binding aging threshold copied from the
+      corresponding northbound scope.
+    </column>
+
+    <group title="Common Columns">
+      <column name="external_ids">
+        <p>
+          <code>ovn-northd</code> stores the UUID of the corresponding
+          northbound <ref table="MAC_Binding_Scope" db="OVN_Northbound"/>
+          in the <code>ovn-nb-id</code> key.
+        </p>
+      </column>
+    </group>
+  </table>
+
+  <table name="Shared_MAC_Binding" title="Shared IP to MAC bindings">
+    <p>
+      Each row specifies a dynamically learned binding from an IP address to
+      an Ethernet address that is valid for every router port in the referenced
+      <ref table="MAC_Binding_Scope"/>.  This table expresses the functional
+      relationship <code>Shared_MAC_Binding(scope, ip) = mac</code>.
+    </p>
+
+    <column name="scope">
+      The shared MAC binding scope in which this binding was learned.
+    </column>
+
+    <column name="ip">
+      The bound IPv4 or IPv6 address.
+    </column>
+
+    <column name="mac">
+      The Ethernet address to which the IP address is bound.
+    </column>
+
+    <column name="timestamp">
+      The timestamp in milliseconds when the binding was added or updated.
     </column>
   </table>
 

@@ -1420,6 +1420,9 @@ get_arp(outport, ip4.dst);
     has prereqs eth.type == 0x800
 get_arp(inport, reg0);
     encodes as push:NXM_NX_REG15[[]],push:NXM_NX_REG0[[]],push:NXM_NX_XXREG0[[96..127]],push:NXM_NX_REG14[[]],pop:NXM_NX_REG15[[]],pop:NXM_NX_REG0[[]],set_field:00:00:00:00:00:00->eth_dst,resubmit(,OFTABLE_MAC_BINDING),pop:NXM_NX_REG0[[]],pop:NXM_NX_REG15[[]]
+get_arp(outport, ip4.dst, 42);
+    encodes as push:NXM_NX_REG0[[]],push:NXM_OF_IP_DST[[]],pop:NXM_NX_REG0[[]],set_field:00:00:00:00:00:00->eth_dst,resubmit(,OFTABLE_MAC_BINDING),push:OXM_OF_METADATA[[]],push:NXM_NX_REG15[[]],set_field:0x2a->metadata,set_field:0->reg15,resubmit(,OFTABLE_SHARED_MAC_BINDING),pop:NXM_NX_REG15[[]],pop:OXM_OF_METADATA[[]],resubmit(,OFTABLE_MAC_BINDING_OVERRIDE),pop:NXM_NX_REG0[[]]
+    has prereqs eth.type == 0x800
 
 get_arp;
     Syntax error at `;' expecting `('.
@@ -1437,6 +1440,10 @@ get_arp(inport, outport);
     Cannot use string field outport where numeric field is required.
 get_arp(reg0, ip4.dst);
     Cannot use numeric field reg0 where string field is required.
+get_arp(outport, ip4.dst, 0);
+    MAC binding scope must be in the range 1 to 16777215
+get_arp(outport, ip4.dst, 16777216);
+    MAC binding scope must be in the range 1 to 16777215
 
 # put_arp
 put_arp(inport, arp.spa, arp.sha);
@@ -1450,6 +1457,9 @@ reg0[[0]] = lookup_arp(inport, ip4.dst, eth.src);
 reg1[[1]] = lookup_arp(inport, arp.spa, arp.sha);
     encodes as push:NXM_NX_REG0[[]],push:NXM_OF_ETH_SRC[[]],push:NXM_NX_ARP_SHA[[]],push:NXM_OF_ARP_SPA[[]],pop:NXM_NX_REG0[[]],pop:NXM_OF_ETH_SRC[[]],set_field:0/0x40->reg10,resubmit(,OFTABLE_MAC_LOOKUP),move:NXM_NX_REG10[[6]]->NXM_NX_XXREG0[[65]],pop:NXM_OF_ETH_SRC[[]],pop:NXM_NX_REG0[[]]
     has prereqs eth.type == 0x806 && eth.type == 0x806
+reg0[[0]] = lookup_arp(inport, ip4.dst, eth.src, 42);
+    encodes as push:NXM_NX_REG0[[]],push:NXM_OF_IP_DST[[]],pop:NXM_NX_REG0[[]],set_field:0/0x40->reg10,resubmit(,OFTABLE_MAC_LOOKUP),push:OXM_OF_METADATA[[]],push:NXM_NX_REG14[[]],set_field:0x2a->metadata,set_field:0->reg14,resubmit(,OFTABLE_SHARED_MAC_LOOKUP),pop:NXM_NX_REG14[[]],pop:OXM_OF_METADATA[[]],resubmit(,OFTABLE_MAC_LOOKUP_OVERRIDE),move:NXM_NX_REG10[[6]]->NXM_NX_XXREG0[[96]],pop:NXM_NX_REG0[[]]
+    has prereqs eth.type == 0x800
 
 lookup_arp;
     Syntax error at `lookup_arp' expecting action.
@@ -1477,6 +1487,9 @@ reg0[[0]] = lookup_arp_ip(inport, ip4.dst);
 reg1[[1]] = lookup_arp_ip(inport, arp.spa);
     encodes as push:NXM_NX_REG15[[]],push:NXM_NX_REG0[[]],push:NXM_OF_ARP_SPA[[]],push:NXM_NX_REG14[[]],pop:NXM_NX_REG15[[]],pop:NXM_NX_REG0[[]],push:NXM_OF_ETH_DST[[]],set_field:0/0x40->reg10,resubmit(,OFTABLE_MAC_BINDING),move:NXM_NX_REG10[[6]]->NXM_NX_XXREG0[[65]],pop:NXM_OF_ETH_DST[[]],pop:NXM_NX_REG0[[]],pop:NXM_NX_REG15[[]]
     has prereqs eth.type == 0x806
+reg0[[0]] = lookup_arp_ip(inport, ip4.dst, 42);
+    encodes as push:NXM_NX_REG15[[]],push:NXM_NX_REG0[[]],push:NXM_OF_IP_DST[[]],push:NXM_NX_REG14[[]],pop:NXM_NX_REG15[[]],pop:NXM_NX_REG0[[]],push:NXM_OF_ETH_DST[[]],set_field:0/0x40->reg10,resubmit(,OFTABLE_MAC_BINDING),push:OXM_OF_METADATA[[]],push:NXM_NX_REG15[[]],set_field:0x2a->metadata,set_field:0->reg15,resubmit(,OFTABLE_SHARED_MAC_BINDING),pop:NXM_NX_REG15[[]],pop:OXM_OF_METADATA[[]],resubmit(,OFTABLE_MAC_BINDING_OVERRIDE),move:NXM_NX_REG10[[6]]->NXM_NX_XXREG0[[96]],pop:NXM_OF_ETH_DST[[]],pop:NXM_NX_REG0[[]],pop:NXM_NX_REG15[[]]
+    has prereqs eth.type == 0x800
 
 lookup_arp_ip;
     Syntax error at `lookup_arp_ip' expecting action.
@@ -1491,7 +1504,7 @@ reg0[[0]] = lookup_arp_ip(inport ip4.dst);
 reg0[[0]] = lookup_arp_ip(inport, ip4.dst;
     Syntax error at `;' expecting `)'.
 reg0[[0]] = lookup_arp_ip(inport, ip4.dst, eth.src;
-    Syntax error at `,' expecting `)'.
+    Syntax error at `eth.src' expecting small integer.
 reg0[[0]] = lookup_arp_ip(inport, eth.dst);
     Cannot use 48-bit field eth.dst[[0..47]] where 32-bit field is required.
 
@@ -1600,6 +1613,9 @@ get_nd(outport, ip6.dst);
     has prereqs eth.type == 0x86dd
 get_nd(inport, xxreg0);
     encodes as push:NXM_NX_REG15[[]],push:NXM_NX_XXREG1[[]],push:NXM_NX_XXREG0[[]],push:NXM_NX_REG14[[]],pop:NXM_NX_REG15[[]],pop:NXM_NX_XXREG1[[]],set_field:00:00:00:00:00:00->eth_dst,resubmit(,OFTABLE_MAC_BINDING),pop:NXM_NX_XXREG1[[]],pop:NXM_NX_REG15[[]]
+get_nd(outport, ip6.dst, 42);
+    encodes as push:NXM_NX_XXREG1[[]],push:NXM_NX_IPV6_DST[[]],pop:NXM_NX_XXREG1[[]],set_field:00:00:00:00:00:00->eth_dst,resubmit(,OFTABLE_MAC_BINDING),push:OXM_OF_METADATA[[]],push:NXM_NX_REG15[[]],set_field:0x2a->metadata,set_field:0->reg15,resubmit(,OFTABLE_SHARED_MAC_BINDING),pop:NXM_NX_REG15[[]],pop:OXM_OF_METADATA[[]],resubmit(,OFTABLE_MAC_BINDING_OVERRIDE),pop:NXM_NX_XXREG1[[]]
+    has prereqs eth.type == 0x86dd
 get_nd;
     Syntax error at `;' expecting `('.
 get_nd();
@@ -1662,6 +1678,9 @@ reg2[[0]] = lookup_nd(inport, ip6.dst, eth.src);
 reg3[[0]] = lookup_nd(inport, nd.target, nd.tll);
     encodes as push:NXM_NX_XXREG0[[]],push:NXM_OF_ETH_SRC[[]],push:NXM_NX_ND_TLL[[]],push:NXM_NX_ND_TARGET[[]],pop:NXM_NX_XXREG0[[]],pop:NXM_OF_ETH_SRC[[]],set_field:0/0x40->reg10,resubmit(,OFTABLE_MAC_LOOKUP),move:NXM_NX_REG10[[6]]->NXM_NX_XXREG0[[0]],pop:NXM_OF_ETH_SRC[[]],pop:NXM_NX_XXREG0[[]]
     has prereqs (icmp6.type == 0x87 || icmp6.type == 0x88) && eth.type == 0x86dd && ip.proto == 0x3a && (eth.type == 0x800 || eth.type == 0x86dd) && icmp6.code == 0 && eth.type == 0x86dd && ip.proto == 0x3a && (eth.type == 0x800 || eth.type == 0x86dd) && ip.ttl == 0xff && (eth.type == 0x800 || eth.type == 0x86dd) && icmp6.type == 0x88 && eth.type == 0x86dd && ip.proto == 0x3a && (eth.type == 0x800 || eth.type == 0x86dd) && icmp6.code == 0 && eth.type == 0x86dd && ip.proto == 0x3a && (eth.type == 0x800 || eth.type == 0x86dd) && ip.ttl == 0xff && (eth.type == 0x800 || eth.type == 0x86dd)
+reg0[[0]] = lookup_nd(inport, ip6.dst, eth.src, 42);
+    encodes as push:NXM_NX_XXREG0[[]],push:NXM_NX_IPV6_DST[[]],pop:NXM_NX_XXREG0[[]],set_field:0/0x40->reg10,resubmit(,OFTABLE_MAC_LOOKUP),push:OXM_OF_METADATA[[]],push:NXM_NX_REG14[[]],set_field:0x2a->metadata,set_field:0->reg14,resubmit(,OFTABLE_SHARED_MAC_LOOKUP),pop:NXM_NX_REG14[[]],pop:OXM_OF_METADATA[[]],resubmit(,OFTABLE_MAC_LOOKUP_OVERRIDE),move:NXM_NX_REG10[[6]]->NXM_NX_XXREG0[[96]],pop:NXM_NX_XXREG0[[]]
+    has prereqs eth.type == 0x86dd
 
 lookup_nd;
     Syntax error at `lookup_nd' expecting action.
@@ -1691,6 +1710,9 @@ reg2[[0]] = lookup_nd_ip(inport, ip6.dst);
 reg3[[0]] = lookup_nd_ip(inport, nd.target);
     encodes as push:NXM_NX_REG15[[]],push:NXM_NX_XXREG1[[]],push:NXM_NX_ND_TARGET[[]],push:NXM_NX_REG14[[]],pop:NXM_NX_REG15[[]],pop:NXM_NX_XXREG1[[]],push:NXM_OF_ETH_DST[[]],set_field:0/0x40->reg10,resubmit(,OFTABLE_MAC_BINDING),move:NXM_NX_REG10[[6]]->NXM_NX_XXREG0[[0]],pop:NXM_OF_ETH_DST[[]],pop:NXM_NX_XXREG1[[]],pop:NXM_NX_REG15[[]]
     has prereqs (icmp6.type == 0x87 || icmp6.type == 0x88) && eth.type == 0x86dd && ip.proto == 0x3a && (eth.type == 0x800 || eth.type == 0x86dd) && icmp6.code == 0 && eth.type == 0x86dd && ip.proto == 0x3a && (eth.type == 0x800 || eth.type == 0x86dd) && ip.ttl == 0xff && (eth.type == 0x800 || eth.type == 0x86dd)
+reg0[[0]] = lookup_nd_ip(inport, ip6.dst, 42);
+    encodes as push:NXM_NX_REG15[[]],push:NXM_NX_XXREG1[[]],push:NXM_NX_IPV6_DST[[]],push:NXM_NX_REG14[[]],pop:NXM_NX_REG15[[]],pop:NXM_NX_XXREG1[[]],push:NXM_OF_ETH_DST[[]],set_field:0/0x40->reg10,resubmit(,OFTABLE_MAC_BINDING),push:OXM_OF_METADATA[[]],push:NXM_NX_REG15[[]],set_field:0x2a->metadata,set_field:0->reg15,resubmit(,OFTABLE_SHARED_MAC_BINDING),pop:NXM_NX_REG15[[]],pop:OXM_OF_METADATA[[]],resubmit(,OFTABLE_MAC_BINDING_OVERRIDE),move:NXM_NX_REG10[[6]]->NXM_NX_XXREG0[[96]],pop:NXM_OF_ETH_DST[[]],pop:NXM_NX_XXREG1[[]],pop:NXM_NX_REG15[[]]
+    has prereqs eth.type == 0x86dd
 
 lookup_nd_ip;
     Syntax error at `lookup_nd_ip' expecting action.
@@ -2283,6 +2305,10 @@ sample(probability=10, obs_point=ct_label);
 # mac_cache_use
 mac_cache_use;
     encodes as resubmit(,OFTABLE_MAC_CACHE_USE)
+mac_cache_use(42);
+    encodes as push:OXM_OF_METADATA[[]],push:NXM_NX_REG14[[]],set_field:0x2a->metadata,set_field:0->reg14,resubmit(,OFTABLE_MAC_CACHE_USE),pop:NXM_NX_REG14[[]],pop:OXM_OF_METADATA[[]]
+mac_cache_use();
+    Syntax error at `)' expecting small integer.
 
 # ct_nw_dst()
 reg1 = ct_nw_dst();
@@ -31175,7 +31201,7 @@ OVN_CHECK_PACKETS([hv2/vif1-tx.pcap], [expected])
 as hv1 ovs-appctl ofproto/trace br-int in_port=1 $packet
 
 # MAC binding entry should have generated
-AT_CHECK([ovn-sbctl find mac ip=10.0.0.2 mac='"00:00:00:00:03:02"' logical_port=lrp-r1-join | grep 10\.0\.0\.2], [0], [ignore], [])
+AT_CHECK([ovn-sbctl find mac_binding ip=10.0.0.2 mac='"00:00:00:00:03:02"' logical_port=lrp-r1-join | grep 10\.0\.0\.2], [0], [ignore], [])
 
 OVN_CLEANUP([hv1],[hv2])
 
@@ -36391,6 +36417,148 @@ OVN_CLEANUP([hv1])
 AT_CLEANUP
 
 OVN_FOR_EACH_NORTHD([
+AT_SETUP([ovn -- shared MAC binding scopes])
+AT_KEYWORDS([mac_binding])
+ovn_start
+
+net_add n1
+sim_add hv1
+as hv1
+check ovs-vsctl add-br br-phys
+ovn_attach n1 br-phys 192.168.0.1
+check ovs-vsctl set open . \
+    external-ids:ovn-bridge-mappings=phys:br-phys
+check ovs-vsctl -- add-port br-phys ext0 -- \
+    set Interface ext0 options:tx_pcap=hv1/ext0-tx.pcap \
+    options:rxq_pcap=hv1/ext0-rx.pcap
+
+check ovn-nbctl ls-add public
+check ovn-nbctl lsp-add-localnet-port public ln phys
+
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-public \
+    00:00:00:00:10:00 192.168.10.1/24
+check ovn-nbctl lsp-add-router-port public public-lr0 lr0-public
+check ovn-nbctl lrp-set-gateway-chassis lr0-public hv1
+
+scope=$(ovn-nbctl create MAC_Binding_Scope name=scope0 \
+    always_learn_from_arp_request=true)
+check ovn-nbctl set Logical_Router_Port lr0-public \
+    mac_binding_scope=$scope
+
+wait_for_ports_up
+wait_row_count Chassis 1 name=hv1 other_config:shared-mac-binding=true
+
+dnl Missing feature flags on an existing chassis must be restored.
+check ovn-sbctl remove Chassis hv1 other_config shared-mac-binding
+wait_row_count Chassis 1 name=hv1 other_config:shared-mac-binding=true
+
+dnl Unrelated scoped port updates must not recompute the MAC cache.
+check as hv1 ovn-appctl -t ovn-controller inc-engine/clear-stats
+check ovn-sbctl set Port_Binding lr0-public external_ids:unrelated=true
+check ovn-nbctl --wait=hv sync
+check_controller_engine_stats hv1 mac_cache norecompute nocompute
+
+sb_scope=$(fetch_column sb:MAC_Binding_Scope _uuid name=scope0)
+scope_key=$(printf "0x%x" \
+    $(fetch_column sb:MAC_Binding_Scope binding_key name=scope0))
+check_column "$sb_scope" Port_Binding mac_binding_scope \
+    logical_port=lr0-public
+
+dnl A GARP learned through a scope member creates one shared row.
+garp=ffffffffffff0000000010fe08060001080006040001
+garp=${garp}0000000010fec0a80afe000000000000c0a80afe
+check as hv1 ovs-appctl netdev-dummy/receive ext0 $garp
+wait_row_count Shared_MAC_Binding 1 ip=192.168.10.254 \
+    mac='"00:00:00:00:10:fe"'
+check_row_count MAC_Binding 0 ip=192.168.10.254
+
+dnl The controller renders the row once in the shared namespace.
+OVS_WAIT_UNTIL([
+    test $(as hv1 ovs-ofctl dump-flows br-int \
+        table=OFTABLE_SHARED_MAC_BINDING | \
+        grep "metadata=${scope_key}" | grep "reg0=0xc0a80afe" | \
+        grep -c "actions=mod_dl_dst:00:00:00:00:10:fe") -eq 1
+])
+OVS_WAIT_UNTIL([
+    test $(as hv1 ovs-ofctl dump-flows br-int \
+        table=OFTABLE_SHARED_MAC_LOOKUP | \
+        grep "metadata=${scope_key}" | grep "reg0=0xc0a80afe" | \
+        grep -c "dl_src=00:00:00:00:10:fe") -eq 1
+])
+
+dnl A regular static binding is a fallback, while an override is applied
+dnl after the shared lookup and remains local to its router port.
+check ovn-nbctl static-mac-binding-add lr0-public 192.168.10.254 \
+    00:00:00:00:10:aa
+OVS_WAIT_UNTIL([
+    test $(as hv1 ovs-ofctl dump-flows br-int \
+        table=OFTABLE_MAC_BINDING | grep "reg0=0xc0a80afe" | \
+        grep -c "actions=mod_dl_dst:00:00:00:00:10:aa") -eq 1
+])
+check ovn-nbctl --may-exist static-mac-binding-add lr0-public \
+    192.168.10.254 00:00:00:00:10:bb
+smb=$(fetch_column nb:Static_MAC_Binding _uuid ip=192.168.10.254)
+check ovn-nbctl set Static_MAC_Binding $smb override_dynamic_mac=true
+OVS_WAIT_UNTIL([
+    test $(as hv1 ovs-ofctl dump-flows br-int \
+        table=OFTABLE_MAC_BINDING_OVERRIDE | \
+        grep "reg0=0xc0a80afe" | \
+        grep -c "actions=mod_dl_dst:00:00:00:00:10:bb") -eq 1
+])
+
+dnl A scope on a remote gateway is still local when its router datapath is
+dnl local.  Its shared bindings must be included by conditional monitoring.
+check ovn-sbctl chassis-add hv2 geneve 192.168.0.2 \
+    -- set Chassis hv2 other_config:shared-mac-binding=true
+
+check ovn-nbctl ls-add internal
+check ovn-nbctl lsp-add internal vif1
+check ovn-nbctl lsp-set-addresses vif1 \
+    "00:00:00:00:20:10 10.0.0.10"
+
+check ovn-nbctl lr-add lr1
+check ovn-nbctl lrp-add lr1 lr1-internal \
+    00:00:00:00:20:01 10.0.0.1/24
+check ovn-nbctl lsp-add-router-port internal internal-lr1 lr1-internal
+check ovn-nbctl lrp-add lr1 lr1-public \
+    00:00:00:00:30:01 192.168.20.1/24
+check ovn-nbctl lsp-add-router-port public public-lr1 lr1-public
+check ovn-nbctl lrp-set-gateway-chassis lr1-public hv2
+
+remote_scope=$(ovn-nbctl create MAC_Binding_Scope name=remote-scope \
+    mac_binding_age_threshold=300)
+check ovn-nbctl set Logical_Router_Port lr1-public \
+    mac_binding_scope=$remote_scope
+check ovn-nbctl --wait=sb sync
+
+remote_sb_scope=$(fetch_column sb:MAC_Binding_Scope _uuid \
+    name=remote-scope)
+remote_scope_key=$(printf "0x%x" \
+    $(fetch_column sb:MAC_Binding_Scope binding_key name=remote-scope))
+hv1_chassis=$(fetch_column Chassis _uuid name=hv1)
+check_row_count Port_Binding 0 mac_binding_scope=$remote_sb_scope \
+    chassis=$hv1_chassis
+
+check as hv1 ovs-vsctl add-port br-int vif1 -- \
+    set Interface vif1 external-ids:iface-id=vif1
+wait_for_ports_up vif1
+check ovn-nbctl --wait=hv sync
+now=$(date +%s)000
+check_uuid ovn-sbctl create Shared_MAC_Binding scope=$remote_sb_scope \
+    ip=192.168.20.254 mac="00\:00\:00\:00\:20\:fe" timestamp=$now
+OVS_WAIT_UNTIL([
+    test $(as hv1 ovs-ofctl dump-flows br-int \
+        table=OFTABLE_SHARED_MAC_BINDING | \
+        grep "metadata=${remote_scope_key}" | grep "reg0=0xc0a814fe" | \
+        grep -c "actions=mod_dl_dst:00:00:00:00:20:fe") -eq 1
+])
+
+OVN_CLEANUP([hv1])
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD([
 AT_SETUP([ovn -- lr mac_binding I-P update])
 AT_KEYWORDS([mac_binding])
 ovn_start
@@ -37222,7 +37390,7 @@ lr_key=$(fetch_column datapath_binding tunnel_key external_ids:name=lr)
 cookie=$(fetch_column mac_binding _uuid logical_port=lr-ls1 | cut -d'-' -f1)
 OVS_WAIT_FOR_OUTPUT_UNQUOTED([as hv1 ovn-appctl -t ovn-controller debug/dump-mac-bindings], [0], [dnl
 Local MAC bindings:
-cookie: 0x$cookie, datapath-key: $lr_key, port-key: 0, ip: 192.168.10.10, mac: 00:00:00:00:10:10
+cookie: 0x$cookie, namespace: datapath, datapath-key: $lr_key, port-key: 0, ip: 192.168.10.10, mac: 00:00:00:00:10:10
 ])
 
 dnl Remove router port.  This deletes the mac binding in the same transaction.
@@ -37248,7 +37416,7 @@ dnl Check local mac binding cache.
 cookie=$(fetch_column mac_binding _uuid logical_port=lr-ls2 | cut -d'-' -f1)
 OVS_WAIT_FOR_OUTPUT_UNQUOTED([as hv1 ovn-appctl -t ovn-controller debug/dump-mac-bindings], [0], [dnl
 Local MAC bindings:
-cookie: 0x$cookie, datapath-key: $lr_key, port-key: 0, ip: 192.168.20.10, mac: 00:00:00:00:20:10
+cookie: 0x$cookie, namespace: datapath, datapath-key: $lr_key, port-key: 0, ip: 192.168.20.10, mac: 00:00:00:00:20:10
 ])
 
 dnl Change LRP tunnel key.
