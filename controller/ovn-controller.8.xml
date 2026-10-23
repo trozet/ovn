@@ -894,6 +894,15 @@
         db="OVN_Southbound"/>, and <ref table="Learned_Route" column="nexthop"
         db="OVN_Southbound"/> columns.
       </dd>
+
+      <dt><code>Shared_MAC_Binding</code></dt>
+      <dd>
+        At runtime, <code>ovn-controller</code> updates the
+        <code>Shared_MAC_Binding</code> table when <code>put_arp</code> and
+        <code>put_nd</code> logical actions learn on a port in a MAC binding
+        scope.  These
+        changes persist beyond the lifetime of <code>ovn-controller</code>.
+      </dd>
     </dl>
 
     <h1>Runtime Management Commands</h1>
