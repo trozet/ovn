@@ -4221,6 +4221,71 @@ AT_CLEANUP
 ])
 
 OVN_FOR_EACH_NORTHD_NO_HV([
+AT_SETUP([Router policies - ECMP chains])
+AT_KEYWORDS([policy-based-routing ecmp chains])
+ovn_start
+
+check ovn-nbctl lr-add lr0
+check ovn-nbctl lrp-add lr0 lr0-p0 00:00:00:00:00:01 \
+    10.0.0.1/24 fd00::1/64
+check ovn-nbctl lr-route-add lr0 0.0.0.0/0 10.0.0.4
+check ovn-nbctl lr-route-add lr0 ::/0 fd00::4
+
+AT_CAPTURE_FILE([trace])
+check_policy() {
+    AT_CHECK([ovn-trace --detailed lr0 \
+        "inport == \"lr0-p0\" && eth.src == 00:00:00:00:00:10 && \
+         eth.dst == 00:00:00:00:00:01 && $family.src == $src && \
+         $family.dst == $dst && ip.ttl == 64" > trace], [0])
+    echo "pkt.mark = $mark;" > expout
+    AT_CHECK([grep "pkt.mark = " trace | sed 's/^ *//'], [0], [expout])
+}
+
+for family in ip4 ip6; do
+    if test "$family" = ip4; then
+        src=10.0.0.10
+        prefix=203.0.113.
+        nexthops=10.0.0.2,10.0.0.3
+    else
+        src=fd00::10
+        prefix=2001:db8::
+        nexthops=fd00::2,fd00::3
+    fi
+
+    dnl Without chains, ECMP should still select a next hop.
+    check ovn-nbctl --wait=sb lr-policy-add lr0 100 "$family" \
+        reroute "$nexthops" pkt_mark=100
+    dst=${prefix}10 mark=100 check_policy
+
+    dnl A main-chain ECMP rule must not capture traffic after a jump to a
+    dnl lower-priority allow in another chain.
+    check ovn-nbctl --chain=bypass lr-policy-add lr0 20 "1" \
+        allow pkt_mark=20
+    check ovn-nbctl --wait=sb lr-policy-add lr0 102 \
+        "$family.dst == ${prefix}10" jump bypass
+    dst=${prefix}10 mark=20 check_policy
+    dst=${prefix}11 mark=100 check_policy
+
+    dnl ECMP in a named chain must run only after a jump to that chain.
+    dnl It must not override lower-priority rules in the main or bypass chain.
+    check ovn-nbctl lr-policy-del lr0 100 "$family"
+    check ovn-nbctl --chain=ecmp lr-policy-add lr0 100 "$family" \
+        reroute "$nexthops" pkt_mark=100
+    check ovn-nbctl lr-policy-add lr0 90 "1" allow pkt_mark=90
+    check ovn-nbctl --wait=sb lr-policy-add lr0 102 \
+        "$family.dst == ${prefix}12" jump ecmp
+    dst=${prefix}10 mark=20 check_policy
+    dst=${prefix}11 mark=90 check_policy
+    dst=${prefix}12 mark=100 check_policy
+
+    check ovn-nbctl --wait=sb lr-policy-del lr0
+done
+
+OVN_CLEANUP_NORTHD
+AT_CLEANUP
+])
+
+OVN_FOR_EACH_NORTHD_NO_HV([
 AT_SETUP([Router policies - output_port])
 ovn_start
 
