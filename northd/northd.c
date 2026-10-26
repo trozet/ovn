@@ -12464,6 +12464,18 @@ static bool check_bfd_state(const struct nbrec_logical_router_policy *rule,
 }
 
 static void
+build_routing_policy_match(const struct route_policy *rp, struct ds *match)
+{
+    ds_clear(match);
+    if (rp->chain_id == -1) {
+        ds_put_cstr(match, rp->rule->match);
+    } else {
+        ds_put_format(match, REG_POLICY_CHAIN_ID" == %d && (%s)",
+                      rp->chain_id, rp->rule->match);
+    }
+}
+
+static void
 build_routing_policy_flow(struct lflow_table *lflows, struct ovn_datapath *od,
                           const struct hmap *lr_ports, struct route_policy *rp,
                           const struct ovsdb_idl_row *stage_hint,
@@ -12525,12 +12537,7 @@ build_routing_policy_flow(struct lflow_table *lflows, struct ovn_datapath *od,
         ds_put_cstr(&actions, REG_ECMP_GROUP_ID" = 0; next;");
     }
 
-    if (rp->chain_id == -1) {
-        ds_put_format(&match, "%s", rule->match);
-    } else {
-        ds_put_format(&match, REG_POLICY_CHAIN_ID" == %d && (%s)",
-                      rp->chain_id, rule->match);
-    }
+    build_routing_policy_match(rp, &match);
 
     ovn_lflow_add(lflows, od, S_ROUTER_IN_POLICY, rule->priority,
                  ds_cstr(&match), ds_cstr(&actions), lflow_ref,
@@ -12633,8 +12640,10 @@ build_ecmp_routing_policy_flows(struct lflow_table *lflows,
                       "; %s = 1; next;", REG_ECMP_GROUP_ID,
                       ecmp_group_id, REG_ECMP_MEMBER_ID);
     }
-    ovn_lflow_add(lflows, od, S_ROUTER_IN_POLICY, rule->priority, rule->match,
-                  ds_cstr(&actions), lflow_ref, WITH_HINT(&rule->header_));
+    build_routing_policy_match(rp, &match);
+    ovn_lflow_add(lflows, od, S_ROUTER_IN_POLICY, rule->priority,
+                  ds_cstr(&match), ds_cstr(&actions), lflow_ref,
+                  WITH_HINT(&rule->header_));
 cleanup:
     ds_destroy(&match);
     ds_destroy(&actions);
